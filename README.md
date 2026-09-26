@@ -59,3 +59,13 @@ import newArticleMarkdown from './content/new-article.md?raw'
 ```
 
 正文支持标题、列表、引用和链接。渲染后的 HTML 会经过 DOMPurify 清理。
+
+## 优化图片
+
+将原始 JPG 放入 `public/images/` 后运行：
+
+```bash
+npm run optimize:images
+```
+
+脚本会生成 `640px` 和 `1600px` 两档 WebP。首页通过 `srcset` 为不同设备选择尺寸，非首屏图片会延迟加载。

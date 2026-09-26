@@ -69,6 +69,10 @@ function openFeatured() {
   window.open('https://www.bilibili.com/video/BV1CVPoeNEq4', '_blank', 'noopener,noreferrer')
 }
 
+function imageSrcset(source) {
+  return `${source.replace('-1600.webp', '-640.webp')} 640w, ${source} 1600w`
+}
+
 onMounted(async () => {
   try {
     const feed = await fetchBilibiliFeed()
@@ -109,7 +113,7 @@ onMounted(async () => {
 
     <main v-if="activeSection === 'home'">
       <section class="hero">
-        <img class="hero-image" src="/images/anti-utopia.jpg" alt="乌托邦P代表作《反乌托邦》封面" />
+        <img class="hero-image" src="/images/anti-utopia-1600.webp" srcset="/images/anti-utopia-640.webp 640w, /images/anti-utopia-1600.webp 1600w" sizes="100vw" width="1600" height="900" fetchpriority="high" decoding="async" alt="乌托邦P代表作《反乌托邦》封面" />
         <div class="hero-scrim"></div>
         <div class="hero-content">
           <div class="status-line"><span></span> SYNTHESIZER V / ROCK / SCIENCE FICTION</div>
@@ -139,7 +143,7 @@ onMounted(async () => {
         </div>
         <div class="article-grid">
           <article v-for="(article, index) in articles" :key="article.id" class="article-card" @click="openArticle(article)">
-            <div class="article-image-wrap"><img :src="article.image" :alt="article.title" /><span>{{ String(index + 1).padStart(2, '0') }}</span></div>
+            <div class="article-image-wrap"><img :src="article.image" :srcset="imageSrcset(article.image)" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" width="1600" height="900" loading="lazy" decoding="async" :alt="article.title" /><span>{{ String(index + 1).padStart(2, '0') }}</span></div>
             <div class="article-meta"><b :style="{ color: article.color }">{{ article.type }}</b><span>{{ article.date }}</span><span>· {{ article.readTime }}</span></div>
             <h3>{{ article.title }}</h3>
             <p>{{ article.excerpt }}</p>
@@ -156,7 +160,7 @@ onMounted(async () => {
           </div>
           <div class="video-grid">
             <a v-for="video in videos.slice(0, 3)" :key="video.id" class="video-card" :href="`https://www.bilibili.com/video/${video.id}`" target="_blank" rel="noreferrer">
-              <div class="video-cover"><img :src="video.cover" :alt="video.title" /><span class="duration">{{ video.duration }}</span><span class="play-overlay"><CirclePlay :size="42" /></span></div>
+              <div class="video-cover"><img :src="video.cover" :srcset="imageSrcset(video.cover)" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" width="1600" height="900" loading="lazy" decoding="async" :alt="video.title" /><span class="duration">{{ video.duration }}</span><span class="play-overlay"><CirclePlay :size="42" /></span></div>
               <div class="video-info"><small>{{ video.id }} · {{ video.date }}</small><h3>{{ video.title }}</h3><p>{{ video.stats }}</p></div>
             </a>
           </div>
@@ -197,7 +201,7 @@ onMounted(async () => {
       </section>
       <section class="section-wrap archive-list">
         <article v-for="article in filteredArticles" :key="article.id" @click="openArticle(article)">
-          <img :src="article.image" :alt="article.title" />
+          <img :src="article.image" :srcset="imageSrcset(article.image)" sizes="(max-width: 560px) calc(100vw - 32px), 250px" width="1600" height="900" loading="lazy" decoding="async" :alt="article.title" />
           <div><span :style="{ color: article.color }">{{ article.type }} / {{ article.date }}</span><h2>{{ article.title }}</h2><p>{{ article.excerpt }}</p><small><Clock3 :size="14"/> {{ article.readTime }}</small></div>
           <ArrowRight class="archive-arrow" />
         </article>
@@ -209,7 +213,7 @@ onMounted(async () => {
       <button class="back-button section-wrap" @click="go('articles')">← 返回文章列表</button>
       <article>
         <header class="article-hero section-wrap"><span :style="{ color: activeArticle.color }">UTOPIA FILE / {{ activeArticle.type }} / {{ activeArticle.date }}</span><h1>{{ activeArticle.title }}</h1><p>{{ activeArticle.excerpt }}</p><small><Clock3 :size="14" /> 阅读约 {{ activeArticle.readTime }}</small></header>
-        <img class="article-banner" :src="activeArticle.image" :alt="activeArticle.title" />
+        <img class="article-banner" :src="activeArticle.image" :srcset="imageSrcset(activeArticle.image)" sizes="100vw" width="1600" height="900" fetchpriority="high" decoding="async" :alt="activeArticle.title" />
         <div class="article-body"><div class="article-markdown" v-html="articleHtml"></div><div class="article-end"><span>END OF FILE</span><button @click="go('articles')">继续阅读 <ArrowRight :size="17" /></button></div></div>
       </article>
     </main>
@@ -218,7 +222,7 @@ onMounted(async () => {
       <section class="page-head section-wrap"><span class="eyebrow">VIDEO ARCHIVE / UID 1858510441</span><h1>作品时间线</h1><p>B 站投稿自动同步。星尘、诗岸、洛天依，与写给现实世界的科幻摇滚。</p></section>
       <section class="section-wrap video-archive">
         <a v-for="(video, i) in videos" :key="video.id" :href="`https://www.bilibili.com/video/${video.id}`" target="_blank" rel="noreferrer">
-          <span class="video-no">0{{ i + 1 }}</span><div class="video-cover"><img :src="video.cover" :alt="video.title"/><span class="play-overlay"><CirclePlay :size="46"/></span></div><div><small>{{ video.id }} / {{ video.date }}</small><h2>{{ video.title }}</h2><p>{{ video.stats }}</p></div><ExternalLink class="external"/>
+          <span class="video-no">0{{ i + 1 }}</span><div class="video-cover"><img :src="video.cover" :srcset="imageSrcset(video.cover)" sizes="(max-width: 560px) calc(100vw - 72px), 270px" width="1600" height="900" loading="lazy" decoding="async" :alt="video.title"/><span class="play-overlay"><CirclePlay :size="46"/></span></div><div><small>{{ video.id }} / {{ video.date }}</small><h2>{{ video.title }}</h2><p>{{ video.stats }}</p></div><ExternalLink class="external"/>
         </a>
       </section>
     </main>
