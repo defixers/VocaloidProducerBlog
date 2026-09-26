@@ -1,0 +1,19 @@
+{
+  "name": "vocaloid-producer-blog",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "latest",
+    "dompurify": "^3.4.16",
+    "lucide-vue-next": "latest",
+    "marked": "^18.0.14",
+    "vite": "latest",
+    "vue": "latest"
+  }
+}
