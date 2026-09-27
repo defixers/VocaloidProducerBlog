@@ -10,7 +10,8 @@
     "start": "node server/index.js",
     "build": "vite build",
     "preview": "vite preview",
-    "optimize:images": "node scripts/optimize-images.mjs"
+    "optimize:images": "node scripts/optimize-images.mjs",
+    "audit:ui": "node scripts/audit-ui.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "latest",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.5",
+    "playwright-core": "^1.63.0",
     "sharp": "^0.35.4"
   }
 }

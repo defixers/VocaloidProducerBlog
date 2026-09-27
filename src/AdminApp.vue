@@ -1,13 +1,14 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import {
   ArrowLeft, Check, ChevronRight, FileText, FolderDown, LayoutDashboard,
   LogOut, Menu, Pencil, Plus, Save, Trash2, Upload, X, Zap,
 } from 'lucide-vue-next'
+import { createAdminApi, getAdminToken, setAdminToken } from './services/admin.js'
 
-const token = ref(sessionStorage.getItem('utopia-admin-token') || '')
+const token = ref(getAdminToken())
 const loginToken = ref('')
 const authenticated = ref(false)
 const loading = ref(false)
@@ -19,6 +20,7 @@ const resources = ref([])
 const message = ref('')
 const error = ref('')
 const uploadFile = ref(null)
+const resourceFileInput = ref(null)
 
 const emptyArticle = () => ({
   id: '',
@@ -45,23 +47,10 @@ const nav = [
 const markdownPreview = computed(() => DOMPurify.sanitize(marked.parse(articleForm.markdown || '')))
 const publishedCount = computed(() => articles.value.filter((article) => article.status === 'published').length)
 const draftCount = computed(() => articles.value.filter((article) => article.status === 'draft').length)
-
-async function api(path, options = {}) {
-  const headers = new Headers(options.headers || {})
-  headers.set('Authorization', `Bearer ${token.value}`)
-  if (!(options.body instanceof FormData) && options.body) headers.set('Content-Type', 'application/json')
-  const response = await fetch(path, { ...options, headers })
-  if (response.status === 401) {
-    authenticated.value = false
-    sessionStorage.removeItem('utopia-admin-token')
-    throw new Error('管理令牌无效')
-  }
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}))
-    throw new Error(data.error || `请求失败（${response.status}）`)
-  }
-  return response.status === 204 ? null : response.json()
-}
+const api = createAdminApi(
+  () => token.value,
+  () => { authenticated.value = false },
+)
 
 async function loadContent() {
   loading.value = true
@@ -80,7 +69,7 @@ async function loadContent() {
 
 async function login() {
   token.value = loginToken.value.trim()
-  sessionStorage.setItem('utopia-admin-token', token.value)
+  setAdminToken(token.value)
   await loadContent()
 }
 
@@ -88,7 +77,7 @@ function logout() {
   token.value = ''
   loginToken.value = ''
   authenticated.value = false
-  sessionStorage.removeItem('utopia-admin-token')
+  setAdminToken('')
 }
 
 function notify(text) {
@@ -96,22 +85,38 @@ function notify(text) {
   setTimeout(() => { message.value = '' }, 2400)
 }
 
+function scrollToTop() {
+  const root = document.documentElement
+  const previousBehavior = root.style.scrollBehavior
+  root.style.scrollBehavior = 'auto'
+  window.scrollTo(0, 0)
+  root.style.scrollBehavior = previousBehavior
+}
+
+async function scrollToTopAfterRender() {
+  await nextTick()
+  scrollToTop()
+}
+
 function setView(view) {
   activeView.value = view
   editorOpen.value = false
   menuOpen.value = false
+  scrollToTopAfterRender()
 }
 
 function newArticle() {
   Object.assign(articleForm, emptyArticle())
   editorOpen.value = true
   activeView.value = 'articles'
+  scrollToTopAfterRender()
 }
 
 function editArticle(article) {
   Object.assign(articleForm, article)
   editorOpen.value = true
   activeView.value = 'articles'
+  scrollToTopAfterRender()
 }
 
 async function saveArticle() {
@@ -168,7 +173,7 @@ async function uploadResource() {
     resources.value.unshift(saved)
     Object.assign(resourceForm, { name: '', tag: '二创资源', meta: '' })
     uploadFile.value = null
-    document.querySelector('#resource-file').value = ''
+    if (resourceFileInput.value) resourceFileInput.value.value = ''
     notify('资源已上传并公开')
   } catch (requestError) {
     error.value = requestError.message
@@ -192,9 +197,16 @@ function formatDate(date) {
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(date))
 }
 
+function handleKeydown(event) {
+  if (event.key === 'Escape') menuOpen.value = false
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
   if (token.value) loadContent()
 })
+
+onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
 </script>
 
 <template>
@@ -215,7 +227,7 @@ onMounted(() => {
   </main>
 
   <div v-else class="admin-shell">
-    <aside :class="['admin-sidebar', { open: menuOpen }]">
+    <aside id="admin-navigation" :class="['admin-sidebar', { open: menuOpen }]">
       <div class="admin-logo"><span><Zap :size="18" fill="currentColor" /></span><b>UTOPIA / CONTROL</b></div>
       <nav>
         <button v-for="item in nav" :key="item.id" :class="{ active: activeView === item.id }" @click="setView(item.id)">
@@ -227,10 +239,11 @@ onMounted(() => {
         <button @click="logout"><LogOut :size="17" />退出登录</button>
       </div>
     </aside>
+    <button v-if="menuOpen" class="admin-backdrop" aria-label="关闭导航" @click="menuOpen = false"></button>
 
     <section class="admin-workspace">
       <header class="admin-topbar">
-        <button class="admin-menu" title="打开导航" @click="menuOpen = !menuOpen"><X v-if="menuOpen"/><Menu v-else/></button>
+        <button class="admin-menu" :title="menuOpen ? '关闭导航' : '打开导航'" :aria-expanded="menuOpen" aria-controls="admin-navigation" @click="menuOpen = !menuOpen"><X v-if="menuOpen"/><Menu v-else/></button>
         <div><span>UTOPIA CONTENT SYSTEM</span><strong>{{ nav.find(item => item.id === activeView)?.label }}</strong></div>
         <button class="new-command" @click="newArticle"><Plus :size="17" />新建文章</button>
       </header>
@@ -285,7 +298,7 @@ onMounted(() => {
         <section class="upload-panel">
           <div class="upload-heading"><Upload :size="22"/><div><h2>上传新资源</h2><p>最大 100 MB，支持 MIDI、音频、压缩包、图片、PDF 和 PSD。</p></div></div>
           <form @submit.prevent="uploadResource">
-            <label class="file-drop" for="resource-file"><input id="resource-file" type="file" required @change="selectFile"/><Upload :size="24"/><b>{{ uploadFile?.name || '选择文件' }}</b><span>{{ uploadFile ? `${Math.ceil(uploadFile.size / 1024)} KB` : '点击浏览本地文件' }}</span></label>
+            <label class="file-drop" for="resource-file"><input id="resource-file" ref="resourceFileInput" type="file" required @change="selectFile"/><Upload :size="24"/><b>{{ uploadFile?.name || '选择文件' }}</b><span>{{ uploadFile ? `${Math.ceil(uploadFile.size / 1024)} KB` : '点击浏览本地文件' }}</span></label>
             <div class="resource-fields"><label>显示名称<input v-model="resourceForm.name" required placeholder="例如：《歌曲名》人声 MIDI"/></label><label>标签<input v-model="resourceForm.tag" /></label><label>补充说明<input v-model="resourceForm.meta" placeholder="格式、版本或使用范围"/></label></div>
             <button class="save-command" type="submit" :disabled="loading"><Upload :size="17"/>上传并公开</button>
           </form>

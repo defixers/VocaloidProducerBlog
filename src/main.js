@@ -1,9 +1,10 @@
 import { createApp } from 'vue'
-import App from './App.vue'
-import AdminApp from './AdminApp.vue'
-import './style.css'
-import './admin.css'
 
-const RootComponent = window.location.pathname.startsWith('/admin') ? AdminApp : App
+const isAdmin = window.location.pathname.startsWith('/admin')
+const [{ default: RootComponent }] = await Promise.all(
+  isAdmin
+    ? [import('./AdminApp.vue'), import('./style.css'), import('./admin.css')]
+    : [import('./App.vue'), import('./style.css')],
+)
 
 createApp(RootComponent).mount('#app')
