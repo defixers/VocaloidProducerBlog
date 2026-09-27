@@ -36,6 +36,16 @@
 
 #### 3.1 凭据轮换与 Git 历史净化
 
+实施状态（2026-09-27）：
+
+- [x] 使用 `git-filter-repo` 从全部历史提交中移除 `.screenshots/` 和 `node_modules/`，并更新远程 `main`。
+- [x] 增加敏感文件扫描脚本、令牌生成器和仓库级提交前 Hook。
+- [ ] 在生产服务器替换 `ADMIN_TOKEN`，使旧管理令牌失效。
+- [ ] 在 Bilibili 账户侧注销旧会话并替换生产服务器的 `BILIBILI_COOKIE`。
+- [ ] 由仓库管理员在 GitHub 启用 Secret Scanning、Push Protection 和私有漏洞报告。
+
+历史已经重写，协作者必须重新克隆仓库，不能将旧分支直接合并回 `main`。
+
 - 立即轮换生产环境的 `ADMIN_TOKEN`、`BILIBILI_COOKIE` 及可能出现在浏览器配置中的会话凭据。
 - 使用 `git filter-repo` 或 BFG 从所有历史提交中彻底移除 `.screenshots/` 和 `node_modules/`。
 - 在维护窗口内强制推送净化后的历史，并通知所有协作者重新克隆仓库。
