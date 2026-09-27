@@ -8,8 +8,6 @@ import {
   Play, Search, Sparkles, X, Zap
 } from 'lucide-vue-next'
 import {
-  articles as fallbackArticles,
-  assets as fallbackAssets,
   dynamics as fallbackDynamics,
   videos as fallbackVideos,
 } from './data'
@@ -22,8 +20,8 @@ const query = ref('')
 const menuOpen = ref(false)
 const downloaded = ref(null)
 const articleFilter = ref('全部')
-const articles = ref([...fallbackArticles])
-const assets = ref([...fallbackAssets])
+const articles = ref([])
+const assets = ref([])
 const videos = ref(fallbackVideos)
 const dynamics = ref(fallbackDynamics)
 const syncState = ref('演示数据')
@@ -35,6 +33,8 @@ const nav = [
   { id: 'videos', label: '视频' },
   { id: 'assets', label: '素材库' },
 ]
+
+const articleTypes = computed(() => ['全部', ...new Set(articles.value.map((article) => article.type).filter(Boolean))])
 
 const filteredArticles = computed(() => {
   const source = articleFilter.value === '全部' ? articles.value : articles.value.filter(a => a.type === articleFilter.value)
@@ -92,8 +92,8 @@ async function loadPublishedContent() {
     const response = await fetch('/api/content')
     if (!response.ok) return
     const content = await response.json()
-    if (content.articles?.length) articles.value = [...content.articles, ...fallbackArticles]
-    if (content.resources?.length) assets.value = [...content.resources, ...fallbackAssets]
+    articles.value = Array.isArray(content.articles) ? content.articles : []
+    assets.value = Array.isArray(content.resources) ? content.resources : []
   } catch (error) {
     console.info('Using bundled content.', error)
   }
@@ -147,7 +147,7 @@ onMounted(async () => {
           <h1>乌托邦<br><em>UTOPIA_P</em></h1>
           <p>普通一学生。写摇滚，也写少年、现实与并不存在的好地方。</p>
           <div class="hero-actions">
-            <button class="primary-button" @click="openArticle(articles[0])">打开作品档案 <ArrowRight :size="18" /></button>
+            <button class="primary-button" @click="go('articles')">打开作品档案 <ArrowRight :size="18" /></button>
             <button class="round-play" aria-label="在 B 站播放反乌托邦" @click="openFeatured"><Play :size="20" fill="currentColor" /></button>
             <span class="track-name">在 B 站观看 · 反乌托邦</span>
           </div>
@@ -168,7 +168,7 @@ onMounted(async () => {
           <div><span class="eyebrow">FIELD NOTES / 01</span><h2>歌与现实的注脚</h2></div>
           <button class="text-button" @click="go('articles')">查看全部 <ArrowRight :size="17" /></button>
         </div>
-        <div class="article-grid">
+        <div v-if="articles.length" class="article-grid">
           <article v-for="(article, index) in articles" :key="article.id" class="article-card" @click="openArticle(article)">
             <div class="article-image-wrap"><img :src="article.image" :srcset="imageSrcset(article.image)" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" width="1600" height="900" loading="lazy" decoding="async" :alt="article.title" /><span>{{ String(index + 1).padStart(2, '0') }}</span></div>
             <div class="article-meta"><b :style="{ color: article.color }">{{ article.type }}</b><span>{{ article.date }}</span><span>· {{ article.readTime }}</span></div>
@@ -177,6 +177,7 @@ onMounted(async () => {
             <button aria-label="阅读全文"><ArrowRight :size="19" /></button>
           </article>
         </div>
+        <p v-else class="empty-state">暂无已发布文章。</p>
       </section>
 
       <section class="video-band">
@@ -209,6 +210,7 @@ onMounted(async () => {
             <span class="license">{{ asset.tag }}</span>
             <button class="download-button" :aria-label="`下载 ${asset.name}`" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="20"/><Download v-else :size="20"/></button>
           </div>
+          <p v-if="!assets.length" class="empty-state">暂无可下载素材。</p>
         </div>
       </section>
 
@@ -223,7 +225,7 @@ onMounted(async () => {
     <main v-else-if="activeSection === 'articles'" class="listing-page">
       <section class="page-head section-wrap"><span class="eyebrow">FIELD NOTES / UTOPIA</span><h1>创作档案</h1><p>摇滚、科幻与少年心事。记录作品背后的现实坐标，也保存那些不能塞进视频简介里的话。</p></section>
       <section class="section-wrap listing-controls">
-        <div class="filters"><button v-for="tag in ['全部', '作品档案', '科幻书架', '阶段记录']" :key="tag" :class="{ active: articleFilter === tag }" @click="articleFilter = tag">{{ tag }}</button></div>
+        <div class="filters"><button v-for="tag in articleTypes" :key="tag" :class="{ active: articleFilter === tag }" @click="articleFilter = tag">{{ tag }}</button></div>
         <label class="search-field"><Search :size="17"/><input v-model="query" placeholder="搜索文章" /></label>
       </section>
       <section class="section-wrap archive-list">
@@ -232,7 +234,7 @@ onMounted(async () => {
           <div><span :style="{ color: article.color }">{{ article.type }} / {{ article.date }}</span><h2>{{ article.title }}</h2><p>{{ article.excerpt }}</p><small><Clock3 :size="14"/> {{ article.readTime }}</small></div>
           <ArrowRight class="archive-arrow" />
         </article>
-        <p v-if="!filteredArticles.length" class="empty-state">没有找到相关文章。</p>
+        <p v-if="!filteredArticles.length" class="empty-state">{{ articles.length ? '没有找到相关文章。' : '暂无已发布文章。' }}</p>
       </section>
     </main>
 
@@ -264,6 +266,7 @@ onMounted(async () => {
           <span class="license">{{ asset.tag }}</span>
           <button class="primary-button small" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="17"/><Download v-else :size="17"/>{{ downloaded === asset.id ? '已加入下载' : '下载' }}</button>
         </div>
+        <p v-if="!assets.length" class="empty-state">暂无可下载素材。</p>
       </section>
     </main>
 

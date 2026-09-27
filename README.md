@@ -85,38 +85,13 @@ PORT=8787
 
 ## Markdown 文章
 
-项目有两类文章来源：
+文章统一通过 `/admin` 后台使用 Markdown 编写，支持实时预览、草稿和发布。文章数据保存在 `server/data/content.json`，主站通过 `/api/content` 读取已发布内容，草稿不会公开显示。
 
-1. 内置文章位于 `src/content/`，适合随 Git 版本管理。
-2. 后台文章通过 `/admin` 发布，保存在服务器数据文件中。
-
-内置文章在 `src/data.js` 中配置元数据，并通过 Vite 的 `?raw` 导入 Markdown：
-
-```js
-import newArticleMarkdown from './content/new-article.md?raw'
-
-{
-  id: 4,
-  title: '文章标题',
-  markdown: newArticleMarkdown,
-}
-```
-
-主站启动后会读取 `/api/content`，将后台已发布文章与内置文章合并。API 不可用时仍会显示内置内容。Markdown 渲染结果会经过 DOMPurify 清理。
+Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发布文章时，主站显示空状态。
 
 ## 二创资源
 
-内置下载文件位于 `public/downloads/`，并在 `src/data.js` 中配置：
-
-```js
-{
-  name: '《奇迹从来没出现》人声 MIDI',
-  downloadUrl: '/downloads/miracle-vocal.mid',
-  downloadName: '奇迹从来没出现人声midi.mid',
-}
-```
-
-后台上传的资源存放在 `server/uploads/`，其元数据写入 `server/data/content.json`。主站会合并内置资源与后台资源。
+二创资源统一通过 `/admin` 后台上传。文件存放在 `server/uploads/`，元数据写入 `server/data/content.json`，上传后会自动显示在主站素材区。没有资源时主站显示空状态。
 
 ## Bilibili 同步
 
@@ -220,14 +195,13 @@ npm run optimize:images
 ## 项目结构
 
 ```text
-public/                 静态图片和内置下载文件
+public/                 静态图片等公开资源
 scripts/                图片优化与界面审计脚本
 server/
   data/content.json     后台文章和资源元数据
   uploads/              后台上传文件
   index.js              Express API 与生产静态服务
 src/
-  content/              内置 Markdown 文章
   services/             后台 API 与 Bilibili 同步客户端
   AdminApp.vue          管理后台
   App.vue               主站
