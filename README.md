@@ -178,6 +178,35 @@ npm start
 
 不要只部署 `dist/`：纯静态部署可以浏览内置内容，但后台、动态文章和上传资源 API 将不可用。
 
+### 反向代理示例
+
+如果前端静态文件和 Express 分开提供，必须确保 `/api/` 与 `/uploads/` 在 SPA 回退规则之前转发到 Express。Nginx 示例：
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /uploads/ {
+    proxy_pass http://127.0.0.1:8787;
+}
+
+location / {
+    try_files $uri $uri/ /index.html;
+}
+```
+
+后台出现 `Unexpected token '<'` 表示 `/api/` 返回了 `index.html`，通常是 SPA 的 `try_files` 或重写规则优先于 API 代理。调整为上述顺序后再检查：
+
+```bash
+curl -i https://你的域名/api/health
+```
+
+正常响应的 `Content-Type` 应为 `application/json`，正文为 `{"ok":true}`。
+
 ## 验证命令
 
 ```bash

@@ -57,6 +57,28 @@ try {
 
     await page.goto('http://127.0.0.1:5173/')
     await inspect(page, `${device.name}-site`)
+    const articleActionOverlap = await page.locator('.article-card').evaluateAll((cards) => cards.some((card) => {
+      const paragraph = card.querySelector('p')?.getBoundingClientRect()
+      const action = card.querySelector('button')?.getBoundingClientRect()
+      if (!paragraph || !action) return false
+      return paragraph.bottom > action.top && paragraph.top < action.bottom
+        && paragraph.right > action.left && paragraph.left < action.right
+    }))
+    if (articleActionOverlap) throw new Error('Article card action overlaps its summary')
+
+    if (device.viewport.width <= 820) {
+      await page.locator('.menu-button').click()
+      await page.locator('.mobile-nav button').filter({ hasText: '文章' }).click()
+    } else {
+      await page.locator('.desktop-nav button').filter({ hasText: '文章' }).click()
+    }
+    await page.getByRole('heading', { name: '创作档案' }).waitFor()
+    const invalidCover = await page.locator('.archive-list img').evaluateAll((images) => images.some((item) => {
+      const { width, height } = item.getBoundingClientRect()
+      return width / height < 1.7 || width / height > 1.85
+    }))
+    if (invalidCover) throw new Error('Article archive cover ratio is invalid')
+    await inspect(page, `${device.name}-articles`)
 
     await page.goto('http://127.0.0.1:5173/admin')
     await inspect(page, `${device.name}-login`)
