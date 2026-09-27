@@ -1,5 +1,14 @@
 const syncUrl = import.meta.env.VITE_BILIBILI_SYNC_URL || '/api/bilibili/feed'
 
+function normalizeVideo(video) {
+  const cover = String(video?.cover || '')
+  const isBilibiliImage = /^https:\/\/[^/]+\.(?:hdslb|biliimg)\.com\//i.test(cover)
+  return {
+    ...video,
+    cover: isBilibiliImage ? `/api/bilibili/image?url=${encodeURIComponent(cover)}` : cover,
+  }
+}
+
 export async function fetchBilibiliFeed() {
   const response = await fetch(syncUrl, {
     headers: { Accept: 'application/json' },
@@ -10,7 +19,7 @@ export async function fetchBilibiliFeed() {
   const data = await response.json()
 
   return {
-    videos: Array.isArray(data.videos) ? data.videos : [],
+    videos: Array.isArray(data.videos) ? data.videos.map(normalizeVideo) : [],
     dynamics: Array.isArray(data.dynamics) ? data.dynamics : [],
     syncedAt: data.syncedAt || new Date().toISOString(),
     stale: Boolean(data.stale),

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { extname, join, resolve } from 'node:path'
+import { basename, extname, join, resolve } from 'node:path'
 import { loadEnvFile } from 'node:process'
 import express from 'express'
 import multer from 'multer'
@@ -48,6 +48,32 @@ const allowedExtensions = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.pdf', '.psd', '.txt',
 ])
 
+function decodeUploadFilename(value) {
+  const filename = String(value || '')
+  if (!/[\u0080-\u00ff]/.test(filename)) return filename
+  const decoded = Buffer.from(filename, 'latin1').toString('utf8')
+  return decoded.includes('\ufffd') ? filename : decoded
+}
+
+function resourceDownloadUrl(resource) {
+  return `/api/resources/${encodeURIComponent(resource.id)}/download`
+}
+
+function serializeResource(resource) {
+  return {
+    ...resource,
+    name: decodeUploadFilename(resource.name),
+    downloadName: decodeUploadFilename(resource.downloadName),
+    downloadUrl: resourceDownloadUrl(resource),
+  }
+}
+
+function resourceStoragePath(resource) {
+  const storedUrl = resource.storagePath || resource.downloadUrl || ''
+  if (!storedUrl.startsWith('/uploads/')) return null
+  return join(uploadDir, basename(storedUrl))
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadDir,
@@ -58,6 +84,7 @@ const upload = multer({
   }),
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_request, file, callback) => {
+    file.originalname = decodeUploadFilename(file.originalname)
     const extension = extname(file.originalname).toLowerCase()
     callback(allowedExtensions.has(extension) ? null : new Error('Unsupported file type.'), allowedExtensions.has(extension))
   },
@@ -115,6 +142,20 @@ function bilibiliHeaders() {
   }
   if (bilibiliCookie) headers.Cookie = bilibiliCookie
   return headers
+}
+
+function parseBilibiliImageUrl(value) {
+  const url = new URL(String(value || ''))
+  const hostname = url.hostname.toLowerCase()
+  const allowed = hostname.endsWith('.hdslb.com') || hostname.endsWith('.biliimg.com')
+  if (url.protocol !== 'https:' || !allowed) throw new Error('Invalid Bilibili image URL')
+  return url
+}
+
+function proxiedBilibiliImageUrl(value) {
+  if (!value) return ''
+  const url = parseBilibiliImageUrl(value)
+  return `/api/bilibili/image?url=${encodeURIComponent(url.href)}`
 }
 
 async function fetchBilibiliJson(url) {
@@ -235,13 +276,46 @@ async function fetchBilibiliVideos() {
     title: normalizeDynamicText(video.title),
     stats: `${formatBilibiliCount(video.play)}播放 · ${formatBilibiliCount(video.video_review)}弹幕`,
     date: formatBilibiliDate(video.created),
-    cover: String(video.pic || '').replace(/^http:/, 'https:').replace(/^\/\//, 'https://'),
+    cover: proxiedBilibiliImageUrl(String(video.pic || '').replace(/^http:/, 'https:').replace(/^\/\//, 'https://')),
     duration: video.length || '',
   })).filter((video) => video.id && video.title && video.cover)
 }
 
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
+})
+
+app.get('/api/bilibili/image', async (request, response) => {
+  try {
+    const imageUrl = parseBilibiliImageUrl(request.query.url)
+    const upstream = await fetch(imageUrl, {
+      headers: {
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: 'https://www.bilibili.com/',
+        'User-Agent': bilibiliHeaders()['User-Agent'],
+      },
+      signal: AbortSignal.timeout(8000),
+    })
+    const contentType = upstream.headers.get('content-type') || ''
+    if (!upstream.ok || !contentType.startsWith('image/')) {
+      throw new Error(`Bilibili image request failed (${upstream.status})`)
+    }
+
+    const contentLength = Number(upstream.headers.get('content-length') || 0)
+    if (contentLength > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
+    const body = Buffer.from(await upstream.arrayBuffer())
+    if (body.length > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
+
+    response.set({
+      'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+      'Content-Type': contentType,
+      'Content-Length': body.length,
+    })
+    response.send(body)
+  } catch (error) {
+    console.error('Bilibili image proxy failed:', error.message)
+    response.status(502).json({ error: 'Bilibili image unavailable' })
+  }
 })
 
 app.get('/api/bilibili/feed', async (_request, response) => {
@@ -289,12 +363,28 @@ app.get('/api/bilibili/feed', async (_request, response) => {
   }
 })
 
+app.get('/api/resources/:id/download', async (request, response, next) => {
+  try {
+    const content = await readContent()
+    const resource = content.resources.find((item) => item.id === request.params.id)
+    const filePath = resource && resourceStoragePath(resource)
+    if (!resource || !filePath) return response.status(404).json({ error: '资源不存在' })
+
+    const downloadName = basename(decodeUploadFilename(resource.downloadName) || 'download')
+    response.download(filePath, downloadName, (error) => {
+      if (error && !response.headersSent) next(error)
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
 app.get('/api/content', async (_request, response, next) => {
   try {
     const content = await readContent()
     response.json({
       articles: content.articles.filter((article) => article.status === 'published'),
-      resources: content.resources,
+      resources: content.resources.map(serializeResource),
     })
   } catch (error) {
     next(error)
@@ -303,7 +393,8 @@ app.get('/api/content', async (_request, response, next) => {
 
 app.get('/api/admin/content', authenticate, async (_request, response, next) => {
   try {
-    response.json(await readContent())
+    const content = await readContent()
+    response.json({ ...content, resources: content.resources.map(serializeResource) })
   } catch (error) {
     next(error)
   }
@@ -365,6 +456,7 @@ app.post('/api/admin/resources', authenticate, upload.single('file'), async (req
       name: String(request.body.name || request.file.originalname).trim(),
       meta: String(request.body.meta || `${Math.ceil(request.file.size / 1024)} KB`).trim(),
       tag: String(request.body.tag || '二创资源').trim(),
+      storagePath: `/uploads/${request.file.filename}`,
       downloadUrl: `/uploads/${request.file.filename}`,
       downloadName: request.file.originalname,
       size: request.file.size,
@@ -373,7 +465,7 @@ app.post('/api/admin/resources', authenticate, upload.single('file'), async (req
     const content = await readContent()
     content.resources.unshift(resource)
     await saveContent(content)
-    response.status(201).json(resource)
+    response.status(201).json(serializeResource(resource))
   } catch (error) {
     if (request.file) await unlink(request.file.path).catch(() => {})
     next(error)
@@ -387,9 +479,8 @@ app.delete('/api/admin/resources/:id', authenticate, async (request, response, n
     if (!resource) return response.status(404).json({ error: '资源不存在' })
     content.resources = content.resources.filter((item) => item.id !== request.params.id)
     await saveContent(content)
-    if (resource.downloadUrl.startsWith('/uploads/')) {
-      await unlink(join(uploadDir, resource.downloadUrl.slice('/uploads/'.length))).catch(() => {})
-    }
+    const filePath = resourceStoragePath(resource)
+    if (filePath) await unlink(filePath).catch(() => {})
     response.status(204).end()
   } catch (error) {
     next(error)

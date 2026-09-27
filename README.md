@@ -93,11 +93,11 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 
 ## 二创资源
 
-二创资源统一通过 `/admin` 后台上传。文件存放在 `server/uploads/`，元数据写入 `server/data/content.json`，上传后会自动显示在主站素材区。没有资源时主站显示空状态。
+二创资源统一通过 `/admin` 后台上传。文件存放在 `server/uploads/`，元数据写入 `server/data/content.json`，上传后会自动显示在主站素材区。下载接口使用 UTF-8 文件名，并自动兼容旧数据中被错误编码的中文文件名。没有资源时主站显示空状态。
 
 ## Bilibili 同步
 
-主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。浏览器不会直接请求 Bilibili。
+主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。视频封面通过同源 `/api/bilibili/image` 代理并设置浏览器缓存，避免 Bilibili 图片防盗链导致封面无法显示。浏览器不会直接请求 Bilibili。
 
 Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况，可以在 `.env` 的 `BILIBILI_COOKIE` 中配置有效的服务端 Cookie 后重启服务。该变量不能添加 `VITE_` 前缀，也不要提交到 Git。
 
