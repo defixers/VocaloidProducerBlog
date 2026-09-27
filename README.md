@@ -42,7 +42,11 @@ npm run build
 
 ## 素材下载
 
-目前下载按钮展示模板交互。上线时可给 `src/data.js` 中的素材项增加 `downloadUrl`，并在 `downloadAsset` 中替换为对象存储、CDN 或经过鉴权的下载地址。
+下载文件存放在 `public/downloads/`，并在 `src/data.js` 的素材项中配置 `downloadUrl` 和 `downloadName`。当前已提供《奇迹从来没出现》人声 MIDI：
+
+```text
+/downloads/miracle-vocal.mid
+```
 
 ## 编写文章
 

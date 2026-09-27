@@ -48,10 +48,14 @@ export const videos = [
 ]
 
 export const assets = [
-  { id: 1, name: '《反乌托邦》伴奏与翻唱说明', meta: 'WAV / 使用说明 · 上线后开放', tag: '待开放', icon: 'wave', downloads: '--' },
-  { id: 2, name: '作品封面公开展示包', meta: 'PNG / JPG · 上线后开放', tag: '需署名', icon: 'image', downloads: '--' },
-  { id: 3, name: '二创投稿许可说明', meta: 'PDF · 版本待确认', tag: '规则文件', icon: 'archive', downloads: '--' },
-  { id: 4, name: '乌托邦P 视觉识别素材', meta: 'Logo / 标准字 · 上线后开放', tag: '应援用途', icon: 'layers', downloads: '--' },
+  {
+    id: 1,
+    name: '《奇迹从来没出现》人声 MIDI',
+    meta: 'Standard MIDI File · 16 KB',
+    tag: '人声轨',
+    downloadUrl: '/downloads/miracle-vocal.mid',
+    downloadName: '奇迹从来没出现人声midi.mid',
+  },
 ]
 
 export const dynamics = [

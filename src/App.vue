@@ -4,7 +4,7 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import {
   ArrowDownToLine, ArrowRight, Box, Check, ChevronRight, CirclePlay, Clock3,
-  Download, ExternalLink, FileArchive, Image, Layers3, Menu, Music2,
+  Download, ExternalLink, Menu, Music2,
   Play, Search, Sparkles, X, Zap
 } from 'lucide-vue-next'
 import { articles, assets, dynamics as fallbackDynamics, videos as fallbackVideos } from './data'
@@ -61,6 +61,12 @@ function openArticle(article) {
 }
 
 function downloadAsset(asset) {
+  const link = document.createElement('a')
+  link.href = asset.downloadUrl
+  link.download = asset.downloadName
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
   downloaded.value = asset.id
   setTimeout(() => { downloaded.value = null }, 2200)
 }
@@ -172,12 +178,12 @@ onMounted(async () => {
         <div class="asset-intro">
           <span class="eyebrow">SECOND CREATION / 03</span>
           <h2>让歌继续<br />被听见。</h2>
-          <p>这里预留伴奏、封面和许可文件。所有资源须经乌托邦P本人确认后上线，二创请保留原作者与原曲信息。</p>
+          <p>人声 MIDI 与已开放的创作资料可在这里直接下载。使用素材时请保留原作者与原曲信息，并遵守作者发布的使用说明。</p>
           <button class="primary-button dark" @click="go('assets')">浏览全部素材 <Box :size="18" /></button>
         </div>
         <div class="asset-list">
           <div v-for="asset in assets.slice(0, 3)" :key="asset.id" class="asset-row">
-            <span class="asset-icon"><Music2 v-if="asset.icon === 'wave'"/><Image v-else-if="asset.icon === 'image'"/><FileArchive v-else/></span>
+            <span class="asset-icon"><Music2 /></span>
             <div><h3>{{ asset.name }}</h3><p>{{ asset.meta }}</p></div>
             <span class="license">{{ asset.tag }}</span>
             <button class="download-button" :aria-label="`下载 ${asset.name}`" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="20"/><Download v-else :size="20"/></button>
@@ -228,12 +234,12 @@ onMounted(async () => {
     </main>
 
     <main v-else-if="activeSection === 'assets'" class="listing-page">
-      <section class="page-head section-wrap asset-head"><div><span class="eyebrow">SECOND CREATION PROTOCOL</span><h1>二创资料室</h1><p>这里是待乌托邦P确认的资源发布模板。正式素材上线后，请按每个文件的独立许可使用并标注原曲与作者。</p></div><ArrowDownToLine :size="72" /></section>
-      <section class="section-wrap license-note"><Sparkles :size="20"/><p><b>上线前提示</b> 当前列表仅演示下载中心的结构，不代表作者已经公开这些文件。实际许可、署名方式和商用范围应由乌托邦P本人确认。</p></section>
+      <section class="page-head section-wrap asset-head"><div><span class="eyebrow">SECOND CREATION DOWNLOADS</span><h1>二创资料室</h1><p>下载用于翻调、编曲参考与二次创作的开放文件。使用时请标注原曲与作者，具体范围以作者发布的说明为准。</p></div><ArrowDownToLine :size="72" /></section>
+      <section class="section-wrap license-note"><Sparkles :size="20"/><p><b>使用提示</b> 下载文件不代表著作权转让。公开发布二创作品前，请确认对应歌曲的署名、转载与商业使用规则。</p></section>
       <section class="section-wrap full-assets">
         <div v-for="asset in assets" :key="asset.id" class="asset-row">
-          <span class="asset-icon"><Music2 v-if="asset.icon === 'wave'"/><Image v-else-if="asset.icon === 'image'"/><FileArchive v-else-if="asset.icon === 'archive'"/><Layers3 v-else/></span>
-          <div><h2>{{ asset.name }}</h2><p>{{ asset.meta }} · {{ asset.downloads }} 次下载</p></div>
+          <span class="asset-icon"><Music2 /></span>
+          <div><h2>{{ asset.name }}</h2><p>{{ asset.meta }}</p></div>
           <span class="license">{{ asset.tag }}</span>
           <button class="primary-button small" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="17"/><Download v-else :size="17"/>{{ downloaded === asset.id ? '已加入下载' : '下载' }}</button>
         </div>
@@ -256,6 +262,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="downloaded" class="toast"><Check :size="18"/> 下载任务已创建（模板演示）</div>
+    <div v-if="downloaded" class="toast"><Check :size="18"/> 文件下载已开始</div>
   </div>
 </template>
