@@ -16,6 +16,7 @@
     "optimize:images": "node scripts/optimize-images.mjs",
     "audit:ui": "node scripts/audit-ui.mjs",
     "test:auth": "node scripts/test-admin-auth.mjs",
+    "test:uploads": "node scripts/test-upload-security.mjs",
     "security:secrets": "node scripts/check-sensitive-files.mjs",
     "security:hash-password": "node scripts/hash-admin-password.mjs"
   },

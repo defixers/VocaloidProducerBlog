@@ -44,7 +44,7 @@ npm run dev       # Vite 前端
 npm run server    # Express API
 ```
 
-开发模式下 Vite 会将 `/api` 和 `/uploads` 代理到 `127.0.0.1:8787`，因此后台管理功能需要 Express API 同时运行。
+开发模式下 Vite 会将 `/api` 代理到 `127.0.0.1:8787`，因此后台管理功能需要 Express API 同时运行。上传目录禁止直接访问，资源只能通过受控下载接口获取。
 
 ## 环境变量
 
@@ -65,6 +65,13 @@ ADMIN_LOGIN_CONCURRENCY=2
 ADMIN_WRITE_WINDOW_MINUTES=10
 ADMIN_WRITE_LIMIT=60
 ADMIN_WRITE_CONCURRENCY=2
+UPLOAD_MAX_FILE_MB=100
+UPLOAD_TOTAL_QUOTA_MB=1024
+UPLOAD_WINDOW_MINUTES=60
+UPLOAD_LIMIT=10
+UPLOAD_CONCURRENCY=1
+UPLOAD_VIRUS_SCAN_COMMAND=clamscan
+UPLOAD_VIRUS_SCAN_ARGS=["--no-summary"]
 TRUST_PROXY_HOPS=1
 PORT=8787
 ```
@@ -82,6 +89,19 @@ PORT=8787
 | `ADMIN_WRITE_WINDOW_MINUTES` | 管理写接口限流窗口，默认 10 分钟 |
 | `ADMIN_WRITE_LIMIT` | 单会话在窗口内允许的管理写请求数，默认 60 次 |
 | `ADMIN_WRITE_CONCURRENCY` | 单会话允许的并发写请求数，默认 2 个 |
+| `APP_STORAGE_ROOT` | 可选的服务端存储根目录，必须位于 Web 根目录之外；默认使用 `server/` |
+| `UPLOAD_MAX_FILE_MB` | 单个上传文件上限，默认 100 MB |
+| `UPLOAD_TOTAL_QUOTA_MB` | 上传目录总容量上限，默认 1024 MB |
+| `UPLOAD_WINDOW_MINUTES` | 上传限流统计窗口，默认 60 分钟 |
+| `UPLOAD_LIMIT` | 管理账户在窗口内允许的上传次数，默认 10 次 |
+| `UPLOAD_CONCURRENCY` | 管理账户允许的并发上传数，默认 1 个 |
+| `UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB` | ZIP 解压后总大小上限，默认 512 MB |
+| `UPLOAD_ARCHIVE_MAX_FILES` | ZIP 内文件数量上限，默认 1000 个 |
+| `UPLOAD_ARCHIVE_MAX_DEPTH` | ZIP 内目录最大层级，默认 10 层 |
+| `UPLOAD_ARCHIVE_MAX_RATIO` | ZIP 最大压缩比，默认 100 |
+| `UPLOAD_VIRUS_SCAN_COMMAND` | 病毒扫描程序路径；推荐使用 `clamscan`，未配置时拒绝 ZIP、7Z 和 RAR |
+| `UPLOAD_VIRUS_SCAN_ARGS` | 传给扫描程序的 JSON 字符串数组，文件路径会自动追加到末尾 |
+| `UPLOAD_SCAN_TIMEOUT_SECONDS` | 单次病毒扫描超时，默认 60 秒 |
 | `TRUST_PROXY_HOPS` | Express 信任的反向代理跳数；单层 Nginx 使用 `1` |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
@@ -120,7 +140,9 @@ npm run security:secrets
 - 保存草稿或公开发布
 - 标题、分类、摘要、日期、阅读时间、封面和强调色设置
 
-二创资源支持 MID、MIDI、WAV、MP3、FLAC、ZIP、7Z、RAR、PNG、JPG、JPEG、WebP、PDF、PSD 和 TXT，单个文件最大 100 MB。上传成功后会立即显示在主站下载区。
+二创资源支持 MID、MIDI、WAV、MP3、FLAC、ZIP、7Z、RAR、PNG、JPG、JPEG、WebP、PDF、PSD 和 TXT。服务端会联合检查扩展名、浏览器 MIME 和文件签名，拒绝高风险双扩展名；ZIP 还会检查文件数、解压大小、压缩比、目录层级、嵌套压缩包、可执行文件、加密内容和符号链接。服务端不会自动解压上传的压缩包。
+
+生产环境应安装并更新 ClamAV，将 `UPLOAD_VIRUS_SCAN_COMMAND` 设置为 `clamscan` 或其绝对路径。配置扫描器后，文件只有在同步扫描成功后才会写入公开资源列表；扫描器缺失或不可用时，ZIP、7Z 和 RAR 会默认拒绝。上传同时受到单文件大小、总容量、频率和并发限制。
 
 后台文章元数据保存在 `server/data/content.json`，上传文件保存在 `server/uploads/`。草稿不会通过公开接口返回。
 
@@ -132,7 +154,7 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 
 ## 二创资源
 
-二创资源统一通过 `/admin` 后台上传。文件存放在 `server/uploads/`，元数据写入 `server/data/content.json`，上传后会自动显示在主站素材区。下载接口使用 UTF-8 文件名，并自动兼容旧数据中被错误编码的中文文件名。没有资源时主站显示空状态。
+二创资源统一通过 `/admin` 后台上传。文件使用服务端随机名存放在 `server/uploads/`，元数据写入 `server/data/content.json`；也可以通过 `APP_STORAGE_ROOT` 将两者放入独立持久化目录。存储目录不提供静态访问，下载统一经过 `/api/resources/:id/download`，强制使用附件模式、`nosniff` 和 UTF-8 文件名。删除操作先隔离磁盘文件，再提交元数据并记录安全审计事件。没有资源时主站显示空状态。
 
 ## Bilibili 同步
 
@@ -185,7 +207,7 @@ npm run build
 npm start
 ```
 
-`npm run build` 生成 `dist/`。`npm start` 启动 Express，并在同一端口提供 API、上传文件和构建后的单页应用，默认地址为 `http://127.0.0.1:8787`。
+`npm run build` 生成 `dist/`。`npm start` 启动 Express，并在同一端口提供 API、受控资源下载和构建后的单页应用，默认地址为 `http://127.0.0.1:8787`。
 
 生产环境建议：
 
@@ -199,7 +221,7 @@ npm start
 
 ### 反向代理示例
 
-如果前端静态文件和 Express 分开提供，必须确保 `/api/` 与 `/uploads/` 在 SPA 回退规则之前转发到 Express。只允许 Nginx 访问 Express 端口，并使 `TRUST_PROXY_HOPS` 与实际代理层数一致。
+如果前端静态文件和 Express 分开提供，必须确保 `/api/` 在 SPA 回退规则之前转发到 Express，并在 Nginx 明确拒绝 `/uploads/`。只允许 Nginx 访问 Express 端口，并使 `TRUST_PROXY_HOPS` 与实际代理层数一致。
 
 以下共享内存区域必须定义在 Nginx 的 `http` 块中：
 
@@ -255,7 +277,7 @@ location /api/ {
 }
 
 location /uploads/ {
-    proxy_pass http://127.0.0.1:8787;
+    return 404;
 }
 
 location / {
@@ -276,6 +298,9 @@ curl -i https://你的域名/api/health
 ```bash
 npm run build          # 生产构建
 npm run audit:ui       # 桌面、平板和手机界面审计
+npm run test:auth      # 后台认证与限流集成测试
+npm run test:uploads   # 上传、扫描、下载与删除安全集成测试
+npm run security:secrets
 npm run optimize:images
 ```
 

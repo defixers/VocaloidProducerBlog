@@ -1,19 +1,31 @@
 import crypto from 'node:crypto'
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { loadEnvFile } from 'node:process'
+import { promisify } from 'node:util'
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import multer from 'multer'
 import { hashAdminPassword, isAdminPasswordHash, verifyAdminPassword } from './security/password.js'
+import {
+  UploadSecurityError,
+  inspectUpload,
+  requiresVirusScan,
+  uploadContentType,
+  validateUploadMetadata,
+} from './security/upload.js'
+
+const execFileAsync = promisify(execFile)
 
 const rootDir = resolve(import.meta.dirname, '..')
 const envFile = join(rootDir, '.env')
 if (existsSync(envFile)) loadEnvFile(envFile)
-const dataDir = join(rootDir, 'server', 'data')
+const storageRoot = process.env.APP_STORAGE_ROOT ? resolve(process.env.APP_STORAGE_ROOT) : join(rootDir, 'server')
+const dataDir = join(storageRoot, 'data')
 const dataFile = join(dataDir, 'content.json')
-const uploadDir = join(rootDir, 'server', 'uploads')
+const uploadDir = join(storageRoot, 'uploads')
 const distDir = join(rootDir, 'dist')
 const port = Number(process.env.PORT || 8787)
 const isProduction = process.env.NODE_ENV === 'production'
@@ -30,6 +42,8 @@ const loginFailures = new Map()
 const activeAdminWrites = new Map()
 const loginFailureLimit = 10000
 let activeLoginAttempts = 0
+let activeUploads = 0
+let resourceMutationQueue = Promise.resolve()
 const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || (isProduction ? 1 : 0))
 const loginWindowMs = positiveNumber('ADMIN_LOGIN_WINDOW_MINUTES', 15) * 60 * 1000
 const loginIpLimit = positiveInteger('ADMIN_LOGIN_IP_LIMIT', 10)
@@ -40,6 +54,20 @@ const loginConcurrency = positiveInteger('ADMIN_LOGIN_CONCURRENCY', 2)
 const adminWriteWindowMs = positiveNumber('ADMIN_WRITE_WINDOW_MINUTES', 10) * 60 * 1000
 const adminWriteLimit = positiveInteger('ADMIN_WRITE_LIMIT', 60)
 const adminWriteConcurrency = positiveInteger('ADMIN_WRITE_CONCURRENCY', 2)
+const uploadWindowMs = positiveNumber('UPLOAD_WINDOW_MINUTES', 60) * 60 * 1000
+const uploadLimit = positiveInteger('UPLOAD_LIMIT', 10)
+const uploadConcurrency = positiveInteger('UPLOAD_CONCURRENCY', 1)
+const uploadMaxFileBytes = Math.floor(positiveNumber('UPLOAD_MAX_FILE_MB', 100) * 1024 * 1024)
+const uploadTotalQuotaBytes = Math.floor(positiveNumber('UPLOAD_TOTAL_QUOTA_MB', 1024) * 1024 * 1024)
+const archiveLimits = {
+  maxUncompressedBytes: Math.floor(positiveNumber('UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB', 512) * 1024 * 1024),
+  maxFiles: positiveInteger('UPLOAD_ARCHIVE_MAX_FILES', 1000),
+  maxDepth: positiveInteger('UPLOAD_ARCHIVE_MAX_DEPTH', 10),
+  maxCompressionRatio: positiveNumber('UPLOAD_ARCHIVE_MAX_RATIO', 100),
+}
+const virusScanCommand = String(process.env.UPLOAD_VIRUS_SCAN_COMMAND || '').trim()
+const virusScanArgs = stringArrayFromEnv('UPLOAD_VIRUS_SCAN_ARGS', ['--no-summary'])
+const virusScanTimeoutMs = positiveNumber('UPLOAD_SCAN_TIMEOUT_SECONDS', 60) * 1000
 const serverHeadersTimeoutMs = positiveNumber('SERVER_HEADERS_TIMEOUT_SECONDS', 15) * 1000
 const serverRequestTimeoutMs = positiveNumber('SERVER_REQUEST_TIMEOUT_SECONDS', 120) * 1000
 const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
@@ -84,16 +112,7 @@ app.use((request, response, next) => {
   next()
 })
 app.use(express.json({ limit: '512kb' }))
-app.use('/uploads', express.static(uploadDir, {
-  immutable: true,
-  maxAge: '30d',
-  fallthrough: false,
-}))
-
-const allowedExtensions = new Set([
-  '.mid', '.midi', '.wav', '.mp3', '.flac', '.zip', '.7z', '.rar',
-  '.png', '.jpg', '.jpeg', '.webp', '.pdf', '.psd', '.txt',
-])
+app.use('/uploads', (_request, response) => response.status(404).json({ error: '资源不存在' }))
 
 function positiveNumber(name, fallback) {
   const value = Number(process.env[name] || fallback)
@@ -104,6 +123,21 @@ function positiveNumber(name, fallback) {
 function positiveInteger(name, fallback) {
   const value = positiveNumber(name, fallback)
   if (!Number.isInteger(value)) throw new Error(`${name} must be an integer.`)
+  return value
+}
+
+function stringArrayFromEnv(name, fallback) {
+  const source = process.env[name]
+  if (!source) return fallback
+  let value
+  try {
+    value = JSON.parse(source)
+  } catch {
+    throw new Error(`${name} must be a JSON string array.`)
+  }
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`${name} must be a JSON string array.`)
+  }
   return value
 }
 
@@ -119,8 +153,9 @@ function resourceDownloadUrl(resource) {
 }
 
 function serializeResource(resource) {
+  const { storagePath: _storagePath, scanStatus: _scanStatus, ...publicResource } = resource
   return {
-    ...resource,
+    ...publicResource,
     name: decodeUploadFilename(resource.name),
     downloadName: decodeUploadFilename(resource.downloadName),
     downloadUrl: resourceDownloadUrl(resource),
@@ -142,18 +177,62 @@ const upload = multer({
     },
   }),
   limits: {
-    fileSize: 100 * 1024 * 1024,
+    fileSize: uploadMaxFileBytes,
     fieldSize: 32 * 1024,
     fields: 4,
     files: 1,
     parts: 5,
   },
-  fileFilter: (_request, file, callback) => {
+  fileFilter: (request, file, callback) => {
     file.originalname = decodeUploadFilename(file.originalname)
-    const extension = extname(file.originalname).toLowerCase()
-    callback(allowedExtensions.has(extension) ? null : new Error('Unsupported file type.'), allowedExtensions.has(extension))
+    try {
+      request.uploadMetadata = validateUploadMetadata(file)
+      callback(null, true)
+    } catch (error) {
+      callback(error)
+    }
   },
 })
+
+async function uploadDirectorySize() {
+  const entries = await readdir(uploadDir, { withFileTypes: true })
+  const sizes = await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => {
+    return (await stat(join(uploadDir, entry.name))).size
+  }))
+  return sizes.reduce((total, size) => total + size, 0)
+}
+
+async function scanUpload(filePath, extension) {
+  if (!virusScanCommand) {
+    if (requiresVirusScan(extension)) {
+      throw new UploadSecurityError('scanner_unavailable', '压缩包安全扫描服务不可用', 503)
+    }
+    return 'not_required'
+  }
+  try {
+    await execFileAsync(virusScanCommand, [...virusScanArgs, filePath], {
+      timeout: virusScanTimeoutMs,
+      windowsHide: true,
+      maxBuffer: 64 * 1024,
+    })
+    return 'clean'
+  } catch (error) {
+    if (error?.code === 1) throw new UploadSecurityError('malware_detected', '文件未通过安全扫描')
+    throw new UploadSecurityError('scanner_unavailable', '文件安全扫描服务不可用', 503)
+  }
+}
+
+async function withResourceMutation(operation) {
+  const previous = resourceMutationQueue
+  let release
+  resourceMutationQueue = new Promise((resolveQueue) => { release = resolveQueue })
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+  }
+}
 
 async function readContent() {
   const raw = await readFile(dataFile, 'utf8')
@@ -347,6 +426,23 @@ function limitAdminWriteConcurrency(request, response, next) {
   next()
 }
 
+function limitUploadConcurrency(request, response, next) {
+  if (activeUploads >= uploadConcurrency) {
+    return sendRateLimited(request, response, 'admin_upload_concurrency', 1)
+  }
+
+  activeUploads += 1
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    activeUploads = Math.max(0, activeUploads - 1)
+  }
+  response.once('finish', release)
+  response.once('close', release)
+  next()
+}
+
 const loginIpLimiter = rateLimit({
   windowMs: loginWindowMs,
   limit: loginIpLimit,
@@ -373,6 +469,15 @@ const adminWriteLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   handler: (request, response) => sendRateLimited(request, response, 'admin_write_rate_limit', adminWriteWindowMs / 1000),
+})
+
+const uploadRateLimiter = rateLimit({
+  windowMs: uploadWindowMs,
+  limit: uploadLimit,
+  keyGenerator: () => 'admin-account',
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler: (request, response) => sendRateLimited(request, response, 'admin_upload_rate_limit', uploadWindowMs / 1000),
 })
 
 function normalizeArticle(input, existing = {}) {
@@ -675,12 +780,21 @@ app.get('/api/resources/:id/download', async (request, response, next) => {
     const resource = content.resources.find((item) => item.id === request.params.id)
     const filePath = resource && resourceStoragePath(resource)
     if (!resource || !filePath) return response.status(404).json({ error: '资源不存在' })
+    await stat(filePath)
 
     const downloadName = basename(decodeUploadFilename(resource.downloadName) || 'download')
-    response.download(filePath, downloadName, (error) => {
+    const extension = extname(downloadName).toLowerCase()
+    response.download(filePath, downloadName, {
+      headers: {
+        'Content-Type': resource.mime || uploadContentType(extension),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': 'sandbox',
+      },
+    }, (error) => {
       if (error && !response.headersSent) next(error)
     })
   } catch (error) {
+    if (error?.code === 'ENOENT') return response.status(404).json({ error: '资源不存在' })
     next(error)
   }
 })
@@ -816,9 +930,12 @@ app.delete('/api/admin/articles/:id', ...protectAdminWrite, async (request, resp
   }
 })
 
-app.post('/api/admin/resources', ...protectAdminWrite, upload.single('file'), async (request, response, next) => {
+app.post('/api/admin/resources', ...protectAdminWrite, uploadRateLimiter, limitUploadConcurrency, upload.single('file'), async (request, response, next) => {
   try {
     if (!request.file) return response.status(400).json({ error: '请选择上传文件' })
+    const { extension } = request.uploadMetadata
+    await inspectUpload(request.file.path, extension, archiveLimits)
+    const scanStatus = await scanUpload(request.file.path, extension)
     const now = new Date().toISOString()
     const resource = {
       id: crypto.randomUUID(),
@@ -826,14 +943,26 @@ app.post('/api/admin/resources', ...protectAdminWrite, upload.single('file'), as
       meta: String(request.body.meta || `${Math.ceil(request.file.size / 1024)} KB`).trim(),
       tag: String(request.body.tag || '二创资源').trim(),
       storagePath: `/uploads/${request.file.filename}`,
-      downloadUrl: `/uploads/${request.file.filename}`,
       downloadName: request.file.originalname,
       size: request.file.size,
+      mime: uploadContentType(extension),
+      scanStatus,
       createdAt: now,
     }
-    const content = await readContent()
-    content.resources.unshift(resource)
-    await saveContent(content)
+    await withResourceMutation(async () => {
+      if (await uploadDirectorySize() > uploadTotalQuotaBytes) {
+        throw new UploadSecurityError('storage_quota_exceeded', '资源存储空间已满', 413)
+      }
+      const content = await readContent()
+      content.resources.unshift(resource)
+      await saveContent(content)
+    })
+    securityLog('admin_resource_upload', request, 'succeeded', {
+      resourceId: resource.id,
+      extension,
+      size: resource.size,
+      scanStatus,
+    })
     response.status(201).json(serializeResource(resource))
   } catch (error) {
     if (request.file) await unlink(request.file.path).catch(() => {})
@@ -843,15 +972,46 @@ app.post('/api/admin/resources', ...protectAdminWrite, upload.single('file'), as
 
 app.delete('/api/admin/resources/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
-    const content = await readContent()
-    const resource = content.resources.find((item) => item.id === request.params.id)
-    if (!resource) return response.status(404).json({ error: '资源不存在' })
-    content.resources = content.resources.filter((item) => item.id !== request.params.id)
-    await saveContent(content)
-    const filePath = resourceStoragePath(resource)
-    if (filePath) await unlink(filePath).catch(() => {})
+    const result = await withResourceMutation(async () => {
+      const content = await readContent()
+      const resource = content.resources.find((item) => item.id === request.params.id)
+      if (!resource) return null
+
+      const filePath = resourceStoragePath(resource)
+      const quarantinedPath = filePath ? `${filePath}.deleting-${crypto.randomUUID()}` : null
+      let quarantined = false
+      if (filePath) {
+        try {
+          await rename(filePath, quarantinedPath)
+          quarantined = true
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error
+        }
+      }
+
+      content.resources = content.resources.filter((item) => item.id !== request.params.id)
+      try {
+        await saveContent(content)
+      } catch (error) {
+        if (quarantined) await rename(quarantinedPath, filePath).catch(() => {})
+        throw error
+      }
+
+      if (quarantined) {
+        await unlink(quarantinedPath).catch(() => {
+          securityLog('admin_resource_delete_cleanup', request, 'failed', { resourceId: resource.id })
+        })
+      }
+      return { resource, fileState: quarantined ? 'deleted' : 'missing' }
+    })
+    if (!result) return response.status(404).json({ error: '资源不存在' })
+    securityLog('admin_resource_delete', request, 'succeeded', {
+      resourceId: result.resource.id,
+      fileState: result.fileState,
+    })
     response.status(204).end()
   } catch (error) {
+    securityLog('admin_resource_delete', request, 'failed', { resourceId: request.params.id })
     next(error)
   }
 })
@@ -861,6 +1021,17 @@ app.use('/api', (_request, response) => {
 })
 
 app.use((error, request, response, _next) => {
+  if (error instanceof UploadSecurityError) {
+    if (request.file?.path) unlink(request.file.path).catch(() => {})
+    securityLog('admin_resource_upload', request, 'rejected', { reason: error.code })
+    return response.status(error.status).json({ error: error.clientMessage })
+  }
+  if (error instanceof multer.MulterError) {
+    const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400
+    securityLog('admin_resource_upload', request, 'rejected', { reason: error.code })
+    return response.status(status).json({ error: status === 413 ? '上传文件超过限制' : '上传请求无效' })
+  }
+
   console.error(JSON.stringify({
     level: 'error',
     time: new Date().toISOString(),
@@ -873,13 +1044,6 @@ app.use((error, request, response, _next) => {
   }
   if (error instanceof SyntaxError && error?.status === 400 && 'body' in error) {
     return response.status(400).json({ error: '请求格式无效' })
-  }
-  if (error instanceof multer.MulterError) {
-    const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400
-    return response.status(status).json({ error: status === 413 ? '上传文件超过限制' : '上传请求无效' })
-  }
-  if (error.message === 'Unsupported file type.') {
-    return response.status(400).json({ error: '不支持的文件类型' })
   }
   response.status(500).json({ error: '服务器错误' })
 })
