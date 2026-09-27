@@ -16,6 +16,9 @@ const distDir = join(rootDir, 'dist')
 const port = Number(process.env.PORT || 8787)
 const isProduction = process.env.NODE_ENV === 'production'
 const adminToken = process.env.ADMIN_TOKEN || (isProduction ? '' : 'utopia-dev')
+const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
+const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
+const bilibiliCache = { expiresAt: 0, payload: null }
 
 if (!adminToken) {
   throw new Error('ADMIN_TOKEN is required in production.')
@@ -93,8 +96,96 @@ function normalizeArticle(input, existing = {}) {
   }
 }
 
+function normalizeDynamicText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim()
+}
+
+function extractBilibiliDynamic(item) {
+  const module = item.modules?.module_dynamic || {}
+  const originalModule = item.orig?.modules?.module_dynamic || {}
+  const description = module.desc || originalModule.desc
+  const major = module.major || originalModule.major || {}
+  const richNodes = description?.rich_text_nodes || major.opus?.summary?.rich_text_nodes || []
+  const text = normalizeDynamicText(
+    description?.text
+      || major.opus?.summary?.text
+      || major.archive?.title
+      || major.article?.title
+      || major.draw?.items?.[0]?.description,
+  )
+
+  if (!text) return null
+
+  const topic = richNodes.find((node) => node.type === 'RICH_TEXT_NODE_TYPE_TOPIC')?.text
+    || (major.archive ? '#视频投稿' : '#B站动态')
+  const timestamp = Number(item.modules?.module_author?.pub_ts)
+  const time = Number.isFinite(timestamp)
+    ? new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      }).format(new Date(timestamp * 1000)).replaceAll('/', '-')
+    : normalizeDynamicText(item.modules?.module_author?.pub_time)
+
+  return {
+    id: String(item.id_str || item.id || crypto.randomUUID()),
+    time,
+    text: text.length > 180 ? `${text.slice(0, 177)}...` : text,
+    topic,
+  }
+}
+
+async function fetchBilibiliDynamics() {
+  const url = new URL('https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space')
+  url.searchParams.set('host_mid', bilibiliUid)
+  const headers = {
+    Accept: 'application/json, text/plain, */*',
+    Referer: `https://space.bilibili.com/${bilibiliUid}/dynamic`,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36',
+  }
+  if (bilibiliCookie) headers.Cookie = bilibiliCookie
+
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(8000) })
+  const contentType = response.headers.get('content-type') || ''
+  if (!response.ok || !contentType.includes('application/json')) {
+    throw new Error(`Bilibili request failed (${response.status})`)
+  }
+
+  const data = await response.json()
+  if (data.code !== 0 || !Array.isArray(data.data?.items)) {
+    throw new Error(`Bilibili API error (${data.code ?? 'invalid response'})`)
+  }
+
+  return data.data.items.map(extractBilibiliDynamic).filter(Boolean).slice(0, 3)
+}
+
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
+})
+
+app.get('/api/bilibili/feed', async (_request, response) => {
+  const now = Date.now()
+  if (bilibiliCache.payload && bilibiliCache.expiresAt > now) {
+    return response.json(bilibiliCache.payload)
+  }
+
+  try {
+    const payload = {
+      syncedAt: new Date().toISOString(),
+      videos: [],
+      dynamics: await fetchBilibiliDynamics(),
+    }
+    bilibiliCache.payload = payload
+    bilibiliCache.expiresAt = now + 10 * 60 * 1000
+    response.json(payload)
+  } catch (error) {
+    console.error('Bilibili sync failed:', error.message)
+    if (bilibiliCache.payload) return response.json({ ...bilibiliCache.payload, stale: true })
+    response.json({
+      syncedAt: null,
+      videos: [],
+      dynamics: [],
+      unavailable: true,
+    })
+  }
 })
 
 app.get('/api/content', async (_request, response, next) => {

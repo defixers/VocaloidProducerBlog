@@ -8,7 +8,6 @@ import {
   Play, Search, Sparkles, X, Zap
 } from 'lucide-vue-next'
 import {
-  dynamics as fallbackDynamics,
   videos as fallbackVideos,
 } from './data'
 import { fetchBilibiliFeed } from './services/bilibili'
@@ -23,8 +22,8 @@ const articleFilter = ref('全部')
 const articles = ref([])
 const assets = ref([])
 const videos = ref(fallbackVideos)
-const dynamics = ref(fallbackDynamics)
-const syncState = ref('演示数据')
+const dynamics = ref([])
+const syncState = ref('等待同步')
 const bilibiliSpaceUrl = import.meta.env.VITE_BILIBILI_SPACE_URL || 'https://space.bilibili.com/1858510441'
 
 const nav = [
@@ -105,11 +104,16 @@ onMounted(async () => {
     const feed = await fetchBilibiliFeed()
     if (!feed) return
     if (feed.videos.length) videos.value = feed.videos
-    if (feed.dynamics.length) dynamics.value = feed.dynamics
-    syncState.value = '刚刚同步'
+    dynamics.value = feed.dynamics
+    syncState.value = feed.unavailable
+      ? '同步暂不可用'
+      : feed.stale
+        ? '缓存内容'
+        : feed.dynamics.length ? '刚刚同步' : '暂无动态'
   } catch (error) {
-    console.info('Using local Bilibili fallback data.', error)
-    syncState.value = '离线缓存'
+    console.info('Bilibili sync unavailable.', error)
+    dynamics.value = []
+    syncState.value = '同步暂不可用'
   }
 })
 </script>
@@ -217,7 +221,8 @@ onMounted(async () => {
       <section class="dynamic-band">
         <div class="section-wrap dynamic-grid">
           <div class="dynamic-title"><span class="pulse-dot"></span><h2>此刻动态</h2><p>来自 BILIBILI</p></div>
-          <div v-for="dynamic in dynamics" :key="dynamic.time" class="dynamic-item"><span>{{ dynamic.time }}</span><p>{{ dynamic.text }}</p><b>{{ dynamic.topic }}</b></div>
+          <div v-for="dynamic in dynamics" :key="dynamic.id || `${dynamic.time}-${dynamic.text}`" class="dynamic-item"><span>{{ dynamic.time }}</span><p>{{ dynamic.text }}</p><b>{{ dynamic.topic }}</b></div>
+          <p v-if="!dynamics.length" class="dynamic-empty">{{ syncState }}</p>
         </div>
       </section>
     </main>
@@ -273,7 +278,7 @@ onMounted(async () => {
     <footer>
       <div class="footer-brand"><span class="brand-mark"><Zap :size="16" fill="currentColor" /></span><strong>UTOPIA_乌托邦P</strong></div>
       <p>至少我还在为你而歌唱。</p>
-      <div><button @click="go('articles')">文章</button><button @click="go('videos')">视频</button><button @click="go('assets')">素材</button><a href="mailto:hello@qiyin.music">合作联系</a></div>
+      <div><button @click="go('articles')">文章</button><button @click="go('videos')">视频</button><button @click="go('assets')">素材</button><a href="mailto:2811077500@qq.com">合作联系</a></div>
       <small>© 2026 UTOPIA_P. UNOFFICIAL SITE TEMPLATE.</small>
     </footer>
 

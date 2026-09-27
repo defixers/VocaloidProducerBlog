@@ -1,8 +1,6 @@
-const syncUrl = import.meta.env.VITE_BILIBILI_SYNC_URL
+const syncUrl = import.meta.env.VITE_BILIBILI_SYNC_URL || '/api/bilibili/feed'
 
 export async function fetchBilibiliFeed() {
-  if (!syncUrl) return null
-
   const response = await fetch(syncUrl, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(5000),
@@ -15,5 +13,7 @@ export async function fetchBilibiliFeed() {
     videos: Array.isArray(data.videos) ? data.videos : [],
     dynamics: Array.isArray(data.dynamics) ? data.dynamics : [],
     syncedAt: data.syncedAt || new Date().toISOString(),
+    stale: Boolean(data.stale),
+    unavailable: Boolean(data.unavailable),
   }
 }

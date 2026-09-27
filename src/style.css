@@ -116,6 +116,7 @@ a { color: inherit; text-decoration: none; }
 .dynamic-item span { color: #777; font-size: 10px; }
 .dynamic-item p { margin: 9px 0 13px; font-size: 13px; line-height: 1.7; }
 .dynamic-item b { color: var(--coral); font-size: 10px; }
+.dynamic-empty { grid-column: 2 / -1; margin: 0; padding: 22px 26px; border-left: 1px solid var(--line); color: #737870; font-size: 13px; }
 
 .listing-page { min-height: 80vh; padding-bottom: 100px; }
 .page-head { padding-block: 86px 54px; border-bottom: 1px solid var(--line); }
@@ -216,6 +217,7 @@ footer small { text-align: right; color: #676b66; font: 500 9px var(--font-label
   .dynamic-grid { grid-template-columns: 1fr; }
   .dynamic-title { margin-bottom: 28px; }
   .dynamic-item { padding: 22px 0; border-left: 0; border-top: 1px solid var(--line); }
+  .dynamic-empty { grid-column: auto; padding-inline: 0; border-left: 0; border-top: 1px solid var(--line); }
   .archive-list article { grid-template-columns: 180px 1fr 24px; }
   .video-archive > a { grid-template-columns: 38px 200px 1fr 24px; }
 }

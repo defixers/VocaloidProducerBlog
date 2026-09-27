@@ -63,8 +63,10 @@ PORT=8787
 | `ADMIN_TOKEN` | 后台登录令牌；生产环境必须设置为足够长的随机字符串 |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产缓存策略并强制检查管理令牌 |
-| `VITE_BILIBILI_SYNC_URL` | Bilibili 聚合接口地址；不配置时使用本地内容 |
+| `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
 | `VITE_BILIBILI_SPACE_URL` | 主站跳转到 Bilibili 个人空间的地址 |
+| `BILIBILI_UID` | 服务端同步的 Bilibili 用户 UID，默认 `1858510441` |
+| `BILIBILI_COOKIE` | 可选的服务端 Cookie，用于降低公开接口触发风控的概率 |
 
 `VITE_` 开头的变量会在构建时进入前端代码，不能在其中保存 Cookie、Access Key 或签名密钥。
 
@@ -95,26 +97,20 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 
 ## Bilibili 同步
 
-浏览器只读取 `VITE_BILIBILI_SYNC_URL` 指向的统一 JSON 接口。Bilibili 的鉴权、Cookie、WBI 签名和缓存应由你自己的服务端或反向代理处理，本项目当前不直接保存这些凭据。
+主站默认读取同源 `/api/bilibili/feed`。Express 服务端会获取 `BILIBILI_UID` 对应的空间动态，提取最近三条内容并缓存 10 分钟，浏览器不会直接请求 Bilibili。
+
+Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况，可以在 `.env` 的 `BILIBILI_COOKIE` 中配置有效的服务端 Cookie 后重启服务。该变量不能添加 `VITE_` 前缀，也不要提交到 Git。
 
 接口响应格式：
 
 ```json
 {
   "syncedAt": "2026-09-26T14:20:00+08:00",
-  "videos": [
-    {
-      "id": "BV...",
-      "title": "视频标题",
-      "stats": "12.8万播放 · 9,402收藏",
-      "date": "09-15",
-      "cover": "https://...",
-      "duration": "4:12"
-    }
-  ],
+  "videos": [],
   "dynamics": [
     {
-      "time": "今天 14:20",
+      "id": "动态 ID",
+      "time": "2026-09-26",
       "text": "动态正文",
       "topic": "#话题"
     }
@@ -122,7 +118,7 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 }
 ```
 
-接口未配置、超时或返回错误时，主站自动回退到 `src/data.js` 中的本地视频和动态。
+同步成功后“此刻动态”会替换为真实内容。同步失败时接口返回带 `unavailable` 标志的空结果；有历史缓存则返回带 `stale` 标志的最近内容。页面会显示对应状态，不会使用示例动态。首页视频仍使用 `src/data.js` 的本地数据。
 
 ## 图片优化
 
