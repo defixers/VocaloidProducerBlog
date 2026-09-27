@@ -7,7 +7,12 @@ import {
   Download, ExternalLink, Menu, Music2,
   Play, Search, Sparkles, X, Zap
 } from 'lucide-vue-next'
-import { articles, assets, dynamics as fallbackDynamics, videos as fallbackVideos } from './data'
+import {
+  articles as fallbackArticles,
+  assets as fallbackAssets,
+  dynamics as fallbackDynamics,
+  videos as fallbackVideos,
+} from './data'
 import { fetchBilibiliFeed } from './services/bilibili'
 
 const activeSection = ref('home')
@@ -17,6 +22,8 @@ const query = ref('')
 const menuOpen = ref(false)
 const downloaded = ref(null)
 const articleFilter = ref('全部')
+const articles = ref([...fallbackArticles])
+const assets = ref([...fallbackAssets])
 const videos = ref(fallbackVideos)
 const dynamics = ref(fallbackDynamics)
 const syncState = ref('演示数据')
@@ -30,7 +37,7 @@ const nav = [
 ]
 
 const filteredArticles = computed(() => {
-  const source = articleFilter.value === '全部' ? articles : articles.filter(a => a.type === articleFilter.value)
+  const source = articleFilter.value === '全部' ? articles.value : articles.value.filter(a => a.type === articleFilter.value)
   if (!query.value.trim()) return source
   const q = query.value.toLowerCase()
   return source.filter(a => `${a.title}${a.excerpt}${a.type}`.toLowerCase().includes(q))
@@ -39,7 +46,7 @@ const filteredArticles = computed(() => {
 const globalResults = computed(() => {
   if (!query.value.trim()) return []
   const q = query.value.toLowerCase()
-  return articles.filter(a => `${a.title}${a.excerpt}`.toLowerCase().includes(q))
+  return articles.value.filter(a => `${a.title}${a.excerpt}`.toLowerCase().includes(q))
 })
 
 const articleHtml = computed(() => {
@@ -76,10 +83,24 @@ function openFeatured() {
 }
 
 function imageSrcset(source) {
+  if (!source.endsWith('-1600.webp')) return source
   return `${source.replace('-1600.webp', '-640.webp')} 640w, ${source} 1600w`
 }
 
+async function loadPublishedContent() {
+  try {
+    const response = await fetch('/api/content')
+    if (!response.ok) return
+    const content = await response.json()
+    if (content.articles?.length) articles.value = [...content.articles, ...fallbackArticles]
+    if (content.resources?.length) assets.value = [...content.resources, ...fallbackAssets]
+  } catch (error) {
+    console.info('Using bundled content.', error)
+  }
+}
+
 onMounted(async () => {
+  loadPublishedContent()
   try {
     const feed = await fetchBilibiliFeed()
     if (!feed) return

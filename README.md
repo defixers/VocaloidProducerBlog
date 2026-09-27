@@ -6,14 +6,34 @@
 
 ```bash
 npm install
-npm run dev
+npm run dev:full
 ```
+
+主站：`http://127.0.0.1:5173/`
+
+管理后台：`http://127.0.0.1:5173/admin`
+
+开发环境默认管理令牌为 `utopia-dev`。生产环境必须复制 `.env.example` 为 `.env`，并将 `ADMIN_TOKEN` 替换为足够长的随机字符串。
 
 生产构建：
 
 ```bash
 npm run build
+npm start
 ```
+
+`npm start` 会同时提供 API、上传文件和构建后的主站，默认监听 `8787`。生产环境应通过反向代理将域名指向该端口，并持久化备份 `server/data/` 与 `server/uploads/`。
+
+## 管理后台
+
+后台采用令牌认证，包含：
+
+- 工作概览与发布状态统计
+- Markdown 文章新建、实时预览、草稿、发布、编辑和删除
+- 二创文件上传、下载和删除
+- 已发布文章与资源自动同步到主站
+
+文章内容保存在 `server/data/content.json`，上传文件保存在 `server/uploads/`。草稿不会通过公开接口返回。
 
 ## 接入 Bilibili 同步
 
