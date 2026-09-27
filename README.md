@@ -70,6 +70,19 @@ PORT=8787
 
 `VITE_` 开头的变量会在构建时进入前端代码，不能在其中保存 Cookie、Access Key 或签名密钥。
 
+可使用以下命令生成高强度管理令牌：
+
+```bash
+npm run security:generate-token
+```
+
+仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
+
+```bash
+git config core.hooksPath .githooks
+npm run security:secrets
+```
+
 ## 内容管理
 
 后台包含工作概览、文章管理和二创资源三个页面。

@@ -11,7 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "optimize:images": "node scripts/optimize-images.mjs",
-    "audit:ui": "node scripts/audit-ui.mjs"
+    "audit:ui": "node scripts/audit-ui.mjs",
+    "security:secrets": "node scripts/check-sensitive-files.mjs",
+    "security:generate-token": "node scripts/generate-admin-token.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "latest",
