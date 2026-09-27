@@ -58,6 +58,14 @@ APP_ORIGIN=https://www.utopiap.top
 ADMIN_PASSWORD_HASH=replace-with-output-of-npm-run-security-hash-password
 ADMIN_SESSION_IDLE_MINUTES=30
 ADMIN_SESSION_ABSOLUTE_HOURS=8
+ADMIN_LOGIN_WINDOW_MINUTES=15
+ADMIN_LOGIN_IP_LIMIT=10
+ADMIN_LOGIN_ACCOUNT_LIMIT=30
+ADMIN_LOGIN_CONCURRENCY=2
+ADMIN_WRITE_WINDOW_MINUTES=10
+ADMIN_WRITE_LIMIT=60
+ADMIN_WRITE_CONCURRENCY=2
+TRUST_PROXY_HOPS=1
 PORT=8787
 ```
 
@@ -67,6 +75,14 @@ PORT=8787
 | `APP_ORIGIN` | 允许发起管理写请求的 HTTPS Origin；不含路径，多个地址使用逗号分隔 |
 | `ADMIN_SESSION_IDLE_MINUTES` | 管理会话空闲过期时间，默认 30 分钟 |
 | `ADMIN_SESSION_ABSOLUTE_HOURS` | 管理会话绝对过期时间，默认 8 小时 |
+| `ADMIN_LOGIN_WINDOW_MINUTES` | 登录限流统计窗口，默认 15 分钟 |
+| `ADMIN_LOGIN_IP_LIMIT` | 单 IP 在统计窗口内允许的失败登录次数，默认 10 次 |
+| `ADMIN_LOGIN_ACCOUNT_LIMIT` | 管理账户在统计窗口内允许的总失败次数，默认 30 次 |
+| `ADMIN_LOGIN_CONCURRENCY` | 同时执行的 Argon2id 密码验证数，默认 2 次 |
+| `ADMIN_WRITE_WINDOW_MINUTES` | 管理写接口限流窗口，默认 10 分钟 |
+| `ADMIN_WRITE_LIMIT` | 单会话在窗口内允许的管理写请求数，默认 60 次 |
+| `ADMIN_WRITE_CONCURRENCY` | 单会话允许的并发写请求数，默认 2 个 |
+| `TRUST_PROXY_HOPS` | Express 信任的反向代理跳数；单层 Nginx 使用 `1` |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
 | `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
@@ -83,6 +99,8 @@ npm run security:hash-password
 ```
 
 后台登录成功后只在浏览器中设置 `HttpOnly`、`SameSite=Strict` 会话 Cookie。前端不保存管理密码或长期令牌；写操作还需要匹配的 Origin 和 CSRF Token。会话默认空闲 30 分钟或登录 8 小时后失效，退出登录会立即吊销当前会话。
+
+后台登录按 IP 和管理账户分别限流，连续失败会触发指数退避，同时限制 Argon2id 验证并发数。管理写接口按会话限制请求频率和并发数，JSON 请求体上限为 512 KB。安全日志使用单行 JSON，记录请求 ID、来源 IP、事件和结果，不记录密码、Cookie、CSRF Token 或 Authorization Header。
 
 仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
 
@@ -181,11 +199,56 @@ npm start
 
 ### 反向代理示例
 
-如果前端静态文件和 Express 分开提供，必须确保 `/api/` 与 `/uploads/` 在 SPA 回退规则之前转发到 Express。Nginx 示例：
+如果前端静态文件和 Express 分开提供，必须确保 `/api/` 与 `/uploads/` 在 SPA 回退规则之前转发到 Express。只允许 Nginx 访问 Express 端口，并使 `TRUST_PROXY_HOPS` 与实际代理层数一致。
+
+以下共享内存区域必须定义在 Nginx 的 `http` 块中：
 
 ```nginx
+limit_req_zone $binary_remote_addr zone=admin_login:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=admin_api:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=admin_conn:10m;
+```
+
+`server` 块中的路由示例：
+
+```nginx
+client_header_timeout 15s;
+client_body_timeout 30s;
+send_timeout 120s;
+
+location = /api/admin/auth/login {
+    client_max_body_size 16k;
+    limit_req zone=admin_login burst=3 nodelay;
+    limit_conn admin_conn 5;
+
+    proxy_pass http://127.0.0.1:8787;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 15s;
+    proxy_read_timeout 15s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /api/admin/ {
+    client_max_body_size 101m;
+    limit_req zone=admin_api burst=20 nodelay;
+    limit_conn admin_conn 5;
+
+    proxy_pass http://127.0.0.1:8787;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 120s;
+    proxy_read_timeout 120s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
 location /api/ {
     proxy_pass http://127.0.0.1:8787;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 30s;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;

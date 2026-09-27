@@ -5,7 +5,9 @@ import { hashAdminPassword } from '../server/security/password.js'
 const port = 18787
 const origin = 'https://admin.example.test'
 const password = 'integration-test-password'
+const malformedBodySecret = 'malformed-json-secret'
 const passwordHash = await hashAdminPassword(password)
+let serverOutput = ''
 const server = spawn(process.execPath, ['server/index.js'], {
   cwd: new URL('../', import.meta.url),
   env: {
@@ -15,9 +17,16 @@ const server = spawn(process.execPath, ['server/index.js'], {
     APP_ORIGIN: origin,
     ADMIN_PASSWORD_HASH: passwordHash,
     ADMIN_SESSION_IDLE_MINUTES: '0.01',
+    ADMIN_LOGIN_IP_LIMIT: '100',
+    ADMIN_LOGIN_ACCOUNT_LIMIT: '100',
+    ADMIN_LOGIN_BACKOFF_BASE_MS: '30',
+    ADMIN_LOGIN_BACKOFF_MAX_MS: '60',
+    ADMIN_WRITE_LIMIT: '2',
   },
-  stdio: 'ignore',
+  stdio: ['ignore', 'pipe', 'pipe'],
 })
+server.stdout.on('data', (data) => { serverOutput += data })
+server.stderr.on('data', (data) => { serverOutput += data })
 
 const url = (path) => `http://127.0.0.1:${port}${path}`
 const post = (path, options = {}) => fetch(url(path), {
@@ -56,13 +65,34 @@ async function login() {
 try {
   await waitForServer()
 
+  const oversizedRequest = await post('/api/admin/auth/login', {
+    headers: { Origin: origin },
+    body: JSON.stringify({ password: 'x'.repeat(600 * 1024) }),
+  })
+  assert.equal(oversizedRequest.status, 413)
+  assert.equal((await oversizedRequest.json()).error, '请求内容超过限制')
+  const malformedRequest = await post('/api/admin/auth/login', {
+    headers: { Origin: origin },
+    body: `{"password":"${malformedBodySecret}"`,
+  })
+  assert.equal(malformedRequest.status, 400)
+  assert.equal((await malformedRequest.json()).error, '请求格式无效')
   assert.equal((await post('/api/admin/auth/login', {
     body: JSON.stringify({ password }),
   })).status, 403)
-  assert.equal((await post('/api/admin/auth/login', {
+  const failedLogin = await post('/api/admin/auth/login', {
     headers: { Origin: origin },
     body: JSON.stringify({ password: 'incorrect-password' }),
-  })).status, 401)
+  })
+  assert.equal(failedLogin.status, 401)
+  assert.equal((await failedLogin.json()).error, '登录失败')
+  const backedOffLogin = await post('/api/admin/auth/login', {
+    headers: { Origin: origin },
+    body: JSON.stringify({ password: 'incorrect-password' }),
+  })
+  assert.equal(backedOffLogin.status, 429)
+  assert.ok(backedOffLogin.headers.get('retry-after'))
+  await new Promise((resolve) => setTimeout(resolve, 40))
 
   const first = await login()
   assert.equal((await fetch(url('/api/admin/auth/session'), {
@@ -77,6 +107,16 @@ try {
   assert.equal((await post('/api/admin/auth/logout', {
     headers: { Origin: 'https://invalid.example', Cookie: first.cookie, 'X-CSRF-Token': first.csrfToken },
   })).status, 403)
+  const writeHeaders = { Origin: origin, Cookie: first.cookie, 'X-CSRF-Token': first.csrfToken }
+  assert.equal((await fetch(url('/api/admin/articles/missing'), {
+    method: 'DELETE', headers: writeHeaders,
+  })).status, 404)
+  assert.equal((await fetch(url('/api/admin/articles/missing'), {
+    method: 'DELETE', headers: writeHeaders,
+  })).status, 404)
+  assert.equal((await fetch(url('/api/admin/articles/missing'), {
+    method: 'DELETE', headers: writeHeaders,
+  })).status, 429)
 
   await new Promise((resolve) => setTimeout(resolve, 750))
   const expiredSession = await fetch(url('/api/admin/auth/session'), {
@@ -106,6 +146,14 @@ try {
   })
   assert.equal(loggedOutSession.status, 200)
   assert.equal((await loggedOutSession.json()).authenticated, false)
+
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.match(serverOutput, /"event":"admin_login"/)
+  assert.match(serverOutput, /"ip":"[^"]+"/)
+  assert.ok(!serverOutput.includes(password))
+  assert.ok(!serverOutput.includes(malformedBodySecret))
+  assert.ok(!serverOutput.includes(first.cookie))
+  assert.ok(!serverOutput.includes(first.csrfToken))
 
   console.log('Admin authentication integration tests passed.')
 } finally {

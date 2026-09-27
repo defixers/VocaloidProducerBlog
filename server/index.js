@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { loadEnvFile } from 'node:process'
 import express from 'express'
+import { rateLimit } from 'express-rate-limit'
 import multer from 'multer'
 import { hashAdminPassword, isAdminPasswordHash, verifyAdminPassword } from './security/password.js'
 
@@ -25,6 +26,22 @@ const sessionIdleMs = Number(process.env.ADMIN_SESSION_IDLE_MINUTES || 30) * 60 
 const sessionAbsoluteMs = Number(process.env.ADMIN_SESSION_ABSOLUTE_HOURS || 8) * 60 * 60 * 1000
 const sessionCookieName = isProduction ? '__Host-utopia_admin_session' : 'utopia_admin_session'
 const adminSessions = new Map()
+const loginFailures = new Map()
+const activeAdminWrites = new Map()
+const loginFailureLimit = 10000
+let activeLoginAttempts = 0
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || (isProduction ? 1 : 0))
+const loginWindowMs = positiveNumber('ADMIN_LOGIN_WINDOW_MINUTES', 15) * 60 * 1000
+const loginIpLimit = positiveInteger('ADMIN_LOGIN_IP_LIMIT', 10)
+const loginAccountLimit = positiveInteger('ADMIN_LOGIN_ACCOUNT_LIMIT', 30)
+const loginBackoffBaseMs = positiveNumber('ADMIN_LOGIN_BACKOFF_BASE_MS', 500)
+const loginBackoffMaxMs = positiveNumber('ADMIN_LOGIN_BACKOFF_MAX_MS', 30000)
+const loginConcurrency = positiveInteger('ADMIN_LOGIN_CONCURRENCY', 2)
+const adminWriteWindowMs = positiveNumber('ADMIN_WRITE_WINDOW_MINUTES', 10) * 60 * 1000
+const adminWriteLimit = positiveInteger('ADMIN_WRITE_LIMIT', 60)
+const adminWriteConcurrency = positiveInteger('ADMIN_WRITE_CONCURRENCY', 2)
+const serverHeadersTimeoutMs = positiveNumber('SERVER_HEADERS_TIMEOUT_SECONDS', 15) * 1000
+const serverRequestTimeoutMs = positiveNumber('SERVER_REQUEST_TIMEOUT_SECONDS', 120) * 1000
 const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
 const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
 const bilibiliCache = { expiresAt: 0, payload: null }
@@ -51,13 +68,22 @@ if (isProduction && [...allowedOrigins].some((origin) => !origin.startsWith('htt
 if (!Number.isFinite(sessionIdleMs) || sessionIdleMs <= 0 || !Number.isFinite(sessionAbsoluteMs) || sessionAbsoluteMs <= 0) {
   throw new Error('Admin session durations must be positive numbers.')
 }
+if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0) {
+  throw new Error('TRUST_PROXY_HOPS must be a non-negative integer.')
+}
 
 await mkdir(dataDir, { recursive: true })
 await mkdir(uploadDir, { recursive: true })
 
 const app = express()
 app.disable('x-powered-by')
-app.use(express.json({ limit: '2mb' }))
+app.set('trust proxy', trustProxyHops)
+app.use((request, response, next) => {
+  request.requestId = crypto.randomUUID()
+  response.set('X-Request-Id', request.requestId)
+  next()
+})
+app.use(express.json({ limit: '512kb' }))
 app.use('/uploads', express.static(uploadDir, {
   immutable: true,
   maxAge: '30d',
@@ -68,6 +94,18 @@ const allowedExtensions = new Set([
   '.mid', '.midi', '.wav', '.mp3', '.flac', '.zip', '.7z', '.rar',
   '.png', '.jpg', '.jpeg', '.webp', '.pdf', '.psd', '.txt',
 ])
+
+function positiveNumber(name, fallback) {
+  const value = Number(process.env[name] || fallback)
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number.`)
+  return value
+}
+
+function positiveInteger(name, fallback) {
+  const value = positiveNumber(name, fallback)
+  if (!Number.isInteger(value)) throw new Error(`${name} must be an integer.`)
+  return value
+}
 
 function decodeUploadFilename(value) {
   const filename = String(value || '')
@@ -103,7 +141,13 @@ const upload = multer({
       callback(null, `${crypto.randomUUID()}${extension}`)
     },
   }),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: {
+    fileSize: 100 * 1024 * 1024,
+    fieldSize: 32 * 1024,
+    fields: 4,
+    files: 1,
+    parts: 5,
+  },
   fileFilter: (_request, file, callback) => {
     file.originalname = decodeUploadFilename(file.originalname)
     const extension = extname(file.originalname).toLowerCase()
@@ -177,6 +221,7 @@ function authenticate(request, response, next) {
   if (!session || session.absoluteExpiresAt <= now || session.lastSeenAt + sessionIdleMs <= now) {
     if (id) adminSessions.delete(id)
     clearSessionCookie(response)
+    securityLog('admin_session_rejected', request, 'denied')
     return response.status(401).json({ error: '管理会话无效或已过期' })
   }
   session.lastSeenAt = now
@@ -187,7 +232,10 @@ function authenticate(request, response, next) {
 
 function requireTrustedOrigin(request, response, next) {
   const origin = request.get('origin') || ''
-  if (!allowedOrigins.has(origin)) return response.status(403).json({ error: '请求来源无效' })
+  if (!allowedOrigins.has(origin)) {
+    securityLog('admin_origin_rejected', request, 'denied')
+    return response.status(403).json({ error: '请求被拒绝' })
+  }
   next()
 }
 
@@ -195,10 +243,137 @@ function requireCsrf(request, response, next) {
   const supplied = Buffer.from(request.get('x-csrf-token') || '')
   const expected = Buffer.from(request.adminSession?.csrfToken || '')
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
-    return response.status(403).json({ error: 'CSRF 校验失败' })
+    securityLog('admin_csrf_rejected', request, 'denied')
+    return response.status(403).json({ error: '请求被拒绝' })
   }
   next()
 }
+
+function securityLog(event, request, outcome, details = {}) {
+  console.log(JSON.stringify({
+    level: 'security',
+    time: new Date().toISOString(),
+    event,
+    outcome,
+    requestId: request.requestId,
+    ip: request.ip || request.socket.remoteAddress || 'unknown',
+    method: request.method,
+    path: request.path,
+    ...details,
+  }))
+}
+
+function sendRateLimited(request, response, event, retryAfterSeconds = 60) {
+  securityLog(event, request, 'rate_limited')
+  response.set('Retry-After', String(Math.max(1, Math.ceil(retryAfterSeconds))))
+  response.status(429).json({ error: '请求过于频繁，请稍后重试' })
+}
+
+function currentLoginFailure(request) {
+  const key = request.ip || request.socket.remoteAddress || 'unknown'
+  const failure = loginFailures.get(key)
+  if (!failure) return null
+  if (failure.lastFailureAt + loginWindowMs <= Date.now()) {
+    loginFailures.delete(key)
+    return null
+  }
+  return failure
+}
+
+function enforceLoginBackoff(request, response, next) {
+  const failure = currentLoginFailure(request)
+  if (failure?.blockedUntil > Date.now()) {
+    return sendRateLimited(request, response, 'admin_login_backoff', (failure.blockedUntil - Date.now()) / 1000)
+  }
+  next()
+}
+
+function recordLoginFailure(request) {
+  const key = request.ip || request.socket.remoteAddress || 'unknown'
+  const previous = currentLoginFailure(request)
+  const count = (previous?.count || 0) + 1
+  const delay = Math.min(loginBackoffBaseMs * (2 ** Math.min(count - 1, 16)), loginBackoffMaxMs)
+  if (previous) loginFailures.delete(key)
+  while (loginFailures.size >= loginFailureLimit) {
+    loginFailures.delete(loginFailures.keys().next().value)
+  }
+  loginFailures.set(key, {
+    count,
+    lastFailureAt: Date.now(),
+    blockedUntil: Date.now() + delay,
+  })
+  return { count, delay }
+}
+
+function limitLoginConcurrency(request, response, next) {
+  if (activeLoginAttempts >= loginConcurrency) {
+    return sendRateLimited(request, response, 'admin_login_concurrency', 1)
+  }
+
+  activeLoginAttempts += 1
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    activeLoginAttempts = Math.max(0, activeLoginAttempts - 1)
+  }
+  response.once('finish', release)
+  response.once('close', release)
+  next()
+}
+
+function clearLoginFailures(request) {
+  loginFailures.delete(request.ip || request.socket.remoteAddress || 'unknown')
+}
+
+function limitAdminWriteConcurrency(request, response, next) {
+  const key = request.adminSessionId
+  const active = activeAdminWrites.get(key) || 0
+  if (active >= adminWriteConcurrency) {
+    return sendRateLimited(request, response, 'admin_write_concurrency', 1)
+  }
+
+  activeAdminWrites.set(key, active + 1)
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    const remaining = (activeAdminWrites.get(key) || 1) - 1
+    if (remaining > 0) activeAdminWrites.set(key, remaining)
+    else activeAdminWrites.delete(key)
+  }
+  response.once('finish', release)
+  response.once('close', release)
+  next()
+}
+
+const loginIpLimiter = rateLimit({
+  windowMs: loginWindowMs,
+  limit: loginIpLimit,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  handler: (request, response) => sendRateLimited(request, response, 'admin_login_ip_limit', loginWindowMs / 1000),
+})
+
+const loginAccountLimiter = rateLimit({
+  windowMs: loginWindowMs,
+  limit: loginAccountLimit,
+  keyGenerator: () => 'admin-account',
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  handler: (request, response) => sendRateLimited(request, response, 'admin_login_account_limit', loginWindowMs / 1000),
+})
+
+const adminWriteLimiter = rateLimit({
+  windowMs: adminWriteWindowMs,
+  limit: adminWriteLimit,
+  keyGenerator: (request) => request.adminSessionId,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler: (request, response) => sendRateLimited(request, response, 'admin_write_rate_limit', adminWriteWindowMs / 1000),
+})
 
 function normalizeArticle(input, existing = {}) {
   const now = new Date().toISOString()
@@ -527,17 +702,22 @@ app.use('/api/admin', (_request, response, next) => {
   next()
 })
 
-app.post('/api/admin/auth/login', requireTrustedOrigin, async (request, response, next) => {
+app.post('/api/admin/auth/login', requireTrustedOrigin, loginIpLimiter, loginAccountLimiter, enforceLoginBackoff, limitLoginConcurrency, async (request, response, next) => {
   try {
     const password = typeof request.body?.password === 'string' ? request.body.password : ''
     if (!await verifyAdminPassword(adminPasswordHash, password)) {
-      return response.status(401).json({ error: '管理密码无效' })
+      const failure = recordLoginFailure(request)
+      securityLog('admin_login', request, 'failed', { attempts: failure.count, backoffMs: failure.delay })
+      response.set('Retry-After', String(Math.max(1, Math.ceil(failure.delay / 1000))))
+      return response.status(401).json({ error: '登录失败' })
     }
 
+    clearLoginFailures(request)
     const previousSessionId = parseCookies(request).get(sessionCookieName)
     if (previousSessionId) adminSessions.delete(previousSessionId)
     const { id, session } = createAdminSession()
     response.cookie(sessionCookieName, id, sessionCookieOptions())
+    securityLog('admin_login', request, 'succeeded')
     response.json({ authenticated: true, csrfToken: session.csrfToken })
   } catch (error) {
     next(error)
@@ -561,16 +741,24 @@ app.get('/api/admin/auth/session', (request, response) => {
 app.post('/api/admin/auth/logout', requireTrustedOrigin, authenticate, requireCsrf, (request, response) => {
   adminSessions.delete(request.adminSessionId)
   clearSessionCookie(response)
+  securityLog('admin_logout', request, 'succeeded')
   response.status(204).end()
 })
 
 app.post('/api/admin/auth/revoke-all', requireTrustedOrigin, authenticate, requireCsrf, (_request, response) => {
   adminSessions.clear()
   clearSessionCookie(response)
+  securityLog('admin_sessions_revoke_all', _request, 'succeeded')
   response.status(204).end()
 })
 
-const protectAdminWrite = [requireTrustedOrigin, authenticate, requireCsrf]
+const protectAdminWrite = [
+  requireTrustedOrigin,
+  authenticate,
+  requireCsrf,
+  adminWriteLimiter,
+  limitAdminWriteConcurrency,
+]
 
 app.get('/api/admin/content', authenticate, async (_request, response, next) => {
   try {
@@ -672,10 +860,28 @@ app.use('/api', (_request, response) => {
   response.status(404).json({ error: '接口不存在' })
 })
 
-app.use((error, _request, response, _next) => {
-  console.error(error)
-  const status = error instanceof multer.MulterError ? 400 : 500
-  response.status(status).json({ error: error.message || '服务器错误' })
+app.use((error, request, response, _next) => {
+  console.error(JSON.stringify({
+    level: 'error',
+    time: new Date().toISOString(),
+    requestId: request.requestId,
+    name: error.name,
+  }))
+
+  if (error?.type === 'entity.too.large') {
+    return response.status(413).json({ error: '请求内容超过限制' })
+  }
+  if (error instanceof SyntaxError && error?.status === 400 && 'body' in error) {
+    return response.status(400).json({ error: '请求格式无效' })
+  }
+  if (error instanceof multer.MulterError) {
+    const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400
+    return response.status(status).json({ error: status === 413 ? '上传文件超过限制' : '上传请求无效' })
+  }
+  if (error.message === 'Unsupported file type.') {
+    return response.status(400).json({ error: '不支持的文件类型' })
+  }
+  response.status(500).json({ error: '服务器错误' })
 })
 
 if (existsSync(distDir)) {
@@ -684,7 +890,12 @@ if (existsSync(distDir)) {
   app.get('*', (_request, response) => response.sendFile(join(distDir, 'index.html')))
 }
 
-app.listen(port, '0.0.0.0', () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Content server: http://127.0.0.1:${port}`)
   if (!isProduction) console.log('Development admin password: utopia-dev')
 })
+
+server.headersTimeout = serverHeadersTimeoutMs
+server.requestTimeout = serverRequestTimeoutMs
+server.keepAliveTimeout = 5000
+server.maxRequestsPerSocket = 100
