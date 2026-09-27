@@ -320,3 +320,9 @@ src/
   AdminApp.vue          管理后台
   App.vue               主站
 ```
+
+## 开源协议
+
+项目源代码采用 [MIT License](LICENSE) 开源，Copyright (c) 2026 Utopia_乌托邦P。
+
+站点展示的音乐作品、封面和可下载二创素材不因源代码采用 MIT 协议而自动授权；相关内容仍以作者或对应权利人的单独说明为准。
