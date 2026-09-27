@@ -91,7 +91,7 @@ try {
 
     await page.goto('http://127.0.0.1:5173/admin')
     await inspect(page, `${device.name}-login`)
-    await page.getByLabel('管理令牌').fill('utopia-dev')
+    await page.getByLabel('管理密码').fill('utopia-dev')
     await page.getByRole('button', { name: '进入后台' }).click()
     await page.getByText('工作概览').waitFor()
     await inspect(page, `${device.name}-overview`)

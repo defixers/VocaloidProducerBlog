@@ -5,6 +5,7 @@ import { basename, extname, join, resolve } from 'node:path'
 import { loadEnvFile } from 'node:process'
 import express from 'express'
 import multer from 'multer'
+import { hashAdminPassword, isAdminPasswordHash, verifyAdminPassword } from './security/password.js'
 
 const rootDir = resolve(import.meta.dirname, '..')
 const envFile = join(rootDir, '.env')
@@ -15,7 +16,15 @@ const uploadDir = join(rootDir, 'server', 'uploads')
 const distDir = join(rootDir, 'dist')
 const port = Number(process.env.PORT || 8787)
 const isProduction = process.env.NODE_ENV === 'production'
-const adminToken = process.env.ADMIN_TOKEN || (isProduction ? '' : 'utopia-dev')
+const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || (isProduction ? '' : await hashAdminPassword('utopia-dev'))
+const configuredOrigins = process.env.APP_ORIGIN || (isProduction
+  ? ''
+  : 'http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8787,http://localhost:8787')
+const allowedOrigins = new Set(configuredOrigins.split(',').map((value) => value.trim()).filter(Boolean).map((value) => new URL(value).origin))
+const sessionIdleMs = Number(process.env.ADMIN_SESSION_IDLE_MINUTES || 30) * 60 * 1000
+const sessionAbsoluteMs = Number(process.env.ADMIN_SESSION_ABSOLUTE_HOURS || 8) * 60 * 60 * 1000
+const sessionCookieName = isProduction ? '__Host-utopia_admin_session' : 'utopia_admin_session'
+const adminSessions = new Map()
 const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
 const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
 const bilibiliCache = { expiresAt: 0, payload: null }
@@ -30,8 +39,17 @@ const wbiMixinTable = [
   22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
 ]
 
-if (!adminToken) {
-  throw new Error('ADMIN_TOKEN is required in production.')
+if (!isAdminPasswordHash(adminPasswordHash)) {
+  throw new Error('ADMIN_PASSWORD_HASH must be a valid Argon2id hash.')
+}
+if (!allowedOrigins.size) {
+  throw new Error('APP_ORIGIN is required in production.')
+}
+if (isProduction && [...allowedOrigins].some((origin) => !origin.startsWith('https://'))) {
+  throw new Error('APP_ORIGIN must use HTTPS in production.')
+}
+if (!Number.isFinite(sessionIdleMs) || sessionIdleMs <= 0 || !Number.isFinite(sessionAbsoluteMs) || sessionAbsoluteMs <= 0) {
+  throw new Error('Admin session durations must be positive numbers.')
 }
 
 await mkdir(dataDir, { recursive: true })
@@ -104,12 +122,80 @@ async function saveContent(content) {
   await rename(temporaryFile, dataFile)
 }
 
+function parseCookies(request) {
+  const cookies = new Map()
+  for (const part of String(request.headers.cookie || '').split(';')) {
+    const separator = part.indexOf('=')
+    if (separator === -1) continue
+    const name = part.slice(0, separator).trim()
+    const value = part.slice(separator + 1).trim()
+    if (name) cookies.set(name, value)
+  }
+  return cookies
+}
+
+function sessionCookieOptions(maxAge = sessionAbsoluteMs) {
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'strict',
+    path: '/',
+    maxAge,
+  }
+}
+
+function clearSessionCookie(response) {
+  response.clearCookie(sessionCookieName, sessionCookieOptions(0))
+}
+
+function removeExpiredSessions(now = Date.now()) {
+  for (const [id, session] of adminSessions) {
+    if (session.absoluteExpiresAt <= now || session.lastSeenAt + sessionIdleMs <= now) {
+      adminSessions.delete(id)
+    }
+  }
+}
+
+function createAdminSession() {
+  removeExpiredSessions()
+  const now = Date.now()
+  const id = crypto.randomBytes(32).toString('base64url')
+  const session = {
+    csrfToken: crypto.randomBytes(32).toString('base64url'),
+    createdAt: now,
+    lastSeenAt: now,
+    absoluteExpiresAt: now + sessionAbsoluteMs,
+  }
+  adminSessions.set(id, session)
+  return { id, session }
+}
+
 function authenticate(request, response, next) {
-  const token = request.headers.authorization?.replace(/^Bearer\s+/i, '') || ''
-  const expected = Buffer.from(adminToken)
-  const actual = Buffer.from(token)
-  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
-    return response.status(401).json({ error: '管理令牌无效' })
+  const id = parseCookies(request).get(sessionCookieName) || ''
+  const session = adminSessions.get(id)
+  const now = Date.now()
+  if (!session || session.absoluteExpiresAt <= now || session.lastSeenAt + sessionIdleMs <= now) {
+    if (id) adminSessions.delete(id)
+    clearSessionCookie(response)
+    return response.status(401).json({ error: '管理会话无效或已过期' })
+  }
+  session.lastSeenAt = now
+  request.adminSession = session
+  request.adminSessionId = id
+  next()
+}
+
+function requireTrustedOrigin(request, response, next) {
+  const origin = request.get('origin') || ''
+  if (!allowedOrigins.has(origin)) return response.status(403).json({ error: '请求来源无效' })
+  next()
+}
+
+function requireCsrf(request, response, next) {
+  const supplied = Buffer.from(request.get('x-csrf-token') || '')
+  const expected = Buffer.from(request.adminSession?.csrfToken || '')
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    return response.status(403).json({ error: 'CSRF 校验失败' })
   }
   next()
 }
@@ -436,6 +522,56 @@ app.get('/api/content', async (_request, response, next) => {
   }
 })
 
+app.use('/api/admin', (_request, response, next) => {
+  response.set('Cache-Control', 'no-store')
+  next()
+})
+
+app.post('/api/admin/auth/login', requireTrustedOrigin, async (request, response, next) => {
+  try {
+    const password = typeof request.body?.password === 'string' ? request.body.password : ''
+    if (!await verifyAdminPassword(adminPasswordHash, password)) {
+      return response.status(401).json({ error: '管理密码无效' })
+    }
+
+    const previousSessionId = parseCookies(request).get(sessionCookieName)
+    if (previousSessionId) adminSessions.delete(previousSessionId)
+    const { id, session } = createAdminSession()
+    response.cookie(sessionCookieName, id, sessionCookieOptions())
+    response.json({ authenticated: true, csrfToken: session.csrfToken })
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/admin/auth/session', (request, response) => {
+  const id = parseCookies(request).get(sessionCookieName) || ''
+  const session = adminSessions.get(id)
+  const now = Date.now()
+  if (!session || session.absoluteExpiresAt <= now || session.lastSeenAt + sessionIdleMs <= now) {
+    if (id) adminSessions.delete(id)
+    clearSessionCookie(response)
+    return response.json({ authenticated: false })
+  }
+
+  session.lastSeenAt = now
+  response.json({ authenticated: true, csrfToken: session.csrfToken })
+})
+
+app.post('/api/admin/auth/logout', requireTrustedOrigin, authenticate, requireCsrf, (request, response) => {
+  adminSessions.delete(request.adminSessionId)
+  clearSessionCookie(response)
+  response.status(204).end()
+})
+
+app.post('/api/admin/auth/revoke-all', requireTrustedOrigin, authenticate, requireCsrf, (_request, response) => {
+  adminSessions.clear()
+  clearSessionCookie(response)
+  response.status(204).end()
+})
+
+const protectAdminWrite = [requireTrustedOrigin, authenticate, requireCsrf]
+
 app.get('/api/admin/content', authenticate, async (_request, response, next) => {
   try {
     const content = await readContent()
@@ -445,7 +581,7 @@ app.get('/api/admin/content', authenticate, async (_request, response, next) => 
   }
 })
 
-app.post('/api/admin/articles', authenticate, async (request, response, next) => {
+app.post('/api/admin/articles', ...protectAdminWrite, async (request, response, next) => {
   try {
     const article = normalizeArticle(request.body)
     if (!article.title || !article.markdown) {
@@ -460,7 +596,7 @@ app.post('/api/admin/articles', authenticate, async (request, response, next) =>
   }
 })
 
-app.put('/api/admin/articles/:id', authenticate, async (request, response, next) => {
+app.put('/api/admin/articles/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
     const content = await readContent()
     const index = content.articles.findIndex((article) => article.id === request.params.id)
@@ -477,7 +613,7 @@ app.put('/api/admin/articles/:id', authenticate, async (request, response, next)
   }
 })
 
-app.delete('/api/admin/articles/:id', authenticate, async (request, response, next) => {
+app.delete('/api/admin/articles/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
     const content = await readContent()
     const nextArticles = content.articles.filter((article) => article.id !== request.params.id)
@@ -492,7 +628,7 @@ app.delete('/api/admin/articles/:id', authenticate, async (request, response, ne
   }
 })
 
-app.post('/api/admin/resources', authenticate, upload.single('file'), async (request, response, next) => {
+app.post('/api/admin/resources', ...protectAdminWrite, upload.single('file'), async (request, response, next) => {
   try {
     if (!request.file) return response.status(400).json({ error: '请选择上传文件' })
     const now = new Date().toISOString()
@@ -517,7 +653,7 @@ app.post('/api/admin/resources', authenticate, upload.single('file'), async (req
   }
 })
 
-app.delete('/api/admin/resources/:id', authenticate, async (request, response, next) => {
+app.delete('/api/admin/resources/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
     const content = await readContent()
     const resource = content.resources.find((item) => item.id === request.params.id)
@@ -550,5 +686,5 @@ if (existsSync(distDir)) {
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`Content server: http://127.0.0.1:${port}`)
-  if (!isProduction) console.log('Development admin token: utopia-dev')
+  if (!isProduction) console.log('Development admin password: utopia-dev')
 })

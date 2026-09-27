@@ -6,10 +6,9 @@ import {
   ArrowLeft, Check, ChevronRight, FileText, FolderDown, LayoutDashboard,
   LogOut, Menu, Pencil, Plus, Save, Trash2, Upload, X, Zap,
 } from 'lucide-vue-next'
-import { createAdminApi, getAdminToken, setAdminToken } from './services/admin.js'
+import { createAdminApi, loginAdmin, logoutAdmin, restoreAdminSession } from './services/admin.js'
 
-const token = ref(getAdminToken())
-const loginToken = ref('')
+const loginPassword = ref('')
 const authenticated = ref(false)
 const loading = ref(false)
 const activeView = ref('overview')
@@ -21,6 +20,7 @@ const message = ref('')
 const error = ref('')
 const uploadFile = ref(null)
 const resourceFileInput = ref(null)
+const isDevelopment = import.meta.env.DEV
 
 const emptyArticle = () => ({
   id: '',
@@ -47,10 +47,7 @@ const nav = [
 const markdownPreview = computed(() => DOMPurify.sanitize(marked.parse(articleForm.markdown || '')))
 const publishedCount = computed(() => articles.value.filter((article) => article.status === 'published').length)
 const draftCount = computed(() => articles.value.filter((article) => article.status === 'draft').length)
-const api = createAdminApi(
-  () => token.value,
-  () => { authenticated.value = false },
-)
+const api = createAdminApi(() => { authenticated.value = false })
 
 async function loadContent() {
   loading.value = true
@@ -68,16 +65,29 @@ async function loadContent() {
 }
 
 async function login() {
-  token.value = loginToken.value.trim()
-  setAdminToken(token.value)
-  await loadContent()
+  loading.value = true
+  error.value = ''
+  try {
+    await loginAdmin(loginPassword.value)
+    loginPassword.value = ''
+    await loadContent()
+  } catch (requestError) {
+    error.value = requestError.message
+  } finally {
+    loading.value = false
+  }
 }
 
-function logout() {
-  token.value = ''
-  loginToken.value = ''
-  authenticated.value = false
-  setAdminToken('')
+async function logout() {
+  error.value = ''
+  try {
+    await logoutAdmin()
+  } catch (requestError) {
+    error.value = requestError.message
+  } finally {
+    loginPassword.value = ''
+    authenticated.value = false
+  }
 }
 
 function notify(text) {
@@ -201,9 +211,16 @@ function handleKeydown(event) {
   if (event.key === 'Escape') menuOpen.value = false
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('keydown', handleKeydown)
-  if (token.value) loadContent()
+  loading.value = true
+  try {
+    if (await restoreAdminSession()) await loadContent()
+  } catch (requestError) {
+    error.value = requestError.message
+  } finally {
+    loading.value = false
+  }
 })
 
 onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
@@ -217,10 +234,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
       <h1>内容管理后台</h1>
       <p>管理创作文章、Markdown 草稿和二创下载资源。</p>
       <form @submit.prevent="login">
-        <label>管理令牌<input v-model="loginToken" type="password" autocomplete="current-password" placeholder="输入 ADMIN_TOKEN" required /></label>
+        <label>管理密码<input v-model="loginPassword" type="password" autocomplete="current-password" placeholder="输入管理密码" required /></label>
         <button type="submit" :disabled="loading">进入后台 <ChevronRight :size="18" /></button>
       </form>
-      <small>开发环境默认令牌：<code>utopia-dev</code></small>
+      <small v-if="isDevelopment">开发环境默认密码：<code>utopia-dev</code></small>
       <p v-if="error" class="form-error">{{ error }}</p>
       <a href="/"><ArrowLeft :size="16" /> 返回主站</a>
     </section>

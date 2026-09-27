@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=24.7.0"
+  },
   "scripts": {
     "dev": "vite",
     "dev:full": "concurrently -k -n WEB,API -c blue,green \"vite\" \"node server/index.js\"",
@@ -12,8 +15,9 @@
     "preview": "vite preview",
     "optimize:images": "node scripts/optimize-images.mjs",
     "audit:ui": "node scripts/audit-ui.mjs",
+    "test:auth": "node scripts/test-admin-auth.mjs",
     "security:secrets": "node scripts/check-sensitive-files.mjs",
-    "security:generate-token": "node scripts/generate-admin-token.mjs"
+    "security:hash-password": "node scripts/hash-admin-password.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "latest",

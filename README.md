@@ -10,7 +10,7 @@
 - 二创资源展示、上传、下载和删除
 - 桌面、平板和手机响应式管理界面
 - WebP 响应式图片、非首屏延迟加载和前后台代码分包
-- 管理令牌认证、上传类型限制和 100 MB 文件大小限制
+- Argon2id 管理密码、HttpOnly 会话、CSRF 防护、上传类型限制和 100 MB 文件大小限制
 
 ## 技术栈
 
@@ -23,7 +23,7 @@
 
 ## 快速开始
 
-需要 Node.js 20.19 或更高版本。
+需要 Node.js 24.7 或更高版本，以使用内置 Argon2id 密码哈希。
 
 ```bash
 npm install
@@ -34,7 +34,7 @@ npm run dev:full
 
 - 主站：`http://127.0.0.1:5173/`
 - 管理后台：`http://127.0.0.1:5173/admin`
-- 开发环境管理令牌：`utopia-dev`
+- 开发环境管理密码：`utopia-dev`
 - API 健康检查：`http://127.0.0.1:8787/api/health`
 
 只启动某一部分时可以使用：
@@ -54,15 +54,21 @@ npm run server    # Express API
 VITE_BILIBILI_SYNC_URL=/api/bilibili/feed
 VITE_BILIBILI_SPACE_URL=https://space.bilibili.com/1858510441
 NODE_ENV=production
-ADMIN_TOKEN=replace-with-a-long-random-token
+APP_ORIGIN=https://www.utopiap.top
+ADMIN_PASSWORD_HASH=replace-with-output-of-npm-run-security-hash-password
+ADMIN_SESSION_IDLE_MINUTES=30
+ADMIN_SESSION_ABSOLUTE_HOURS=8
 PORT=8787
 ```
 
 | 变量 | 说明 |
 | --- | --- |
-| `ADMIN_TOKEN` | 后台登录令牌；生产环境必须设置为足够长的随机字符串 |
+| `ADMIN_PASSWORD_HASH` | 管理密码的 Argon2id 哈希；生产环境必须设置，不能填写明文密码 |
+| `APP_ORIGIN` | 允许发起管理写请求的 HTTPS Origin；不含路径，多个地址使用逗号分隔 |
+| `ADMIN_SESSION_IDLE_MINUTES` | 管理会话空闲过期时间，默认 30 分钟 |
+| `ADMIN_SESSION_ABSOLUTE_HOURS` | 管理会话绝对过期时间，默认 8 小时 |
 | `PORT` | Express 服务端口，默认 `8787` |
-| `NODE_ENV` | 设置为 `production` 时启用生产缓存策略并强制检查管理令牌 |
+| `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
 | `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
 | `VITE_BILIBILI_SPACE_URL` | 主站跳转到 Bilibili 个人空间的地址 |
 | `BILIBILI_UID` | 服务端同步的 Bilibili 用户 UID，默认 `1858510441` |
@@ -70,11 +76,13 @@ PORT=8787
 
 `VITE_` 开头的变量会在构建时进入前端代码，不能在其中保存 Cookie、Access Key 或签名密钥。
 
-可使用以下命令生成高强度管理令牌：
+使用隐藏输入的交互命令生成 Argon2id 密码哈希，并将输出写入服务器 `.env`：
 
 ```bash
-npm run security:generate-token
+npm run security:hash-password
 ```
+
+后台登录成功后只在浏览器中设置 `HttpOnly`、`SameSite=Strict` 会话 Cookie。前端不保存管理密码或长期令牌；写操作还需要匹配的 Origin 和 CSRF Token。会话默认空闲 30 分钟或登录 8 小时后失效，退出登录会立即吊销当前会话。
 
 仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
 
@@ -163,7 +171,7 @@ npm start
 
 生产环境建议：
 
-- 设置 `NODE_ENV=production` 和强随机 `ADMIN_TOKEN`
+- 设置 `NODE_ENV=production`、正确的 `APP_ORIGIN` 和 `ADMIN_PASSWORD_HASH`
 - 使用 Nginx、Caddy 或其他反向代理提供 HTTPS
 - 将请求转发到 Express 的 `PORT`
 - 持久化并定期备份 `server/data/` 和 `server/uploads/`

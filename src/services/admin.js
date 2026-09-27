@@ -1,48 +1,75 @@
-const TOKEN_KEY = 'utopia-admin-token'
+let csrfToken = ''
+const unauthorized = Symbol('unauthorized')
 
-export function getAdminToken() {
-  return sessionStorage.getItem(TOKEN_KEY) || ''
+async function request(path, options = {}, allowUnauthorized = false) {
+  let response
+  try {
+    response = await fetch(path, { ...options, credentials: 'same-origin' })
+  } catch {
+    throw new Error('无法连接后台 API，请检查内容服务是否已启动')
+  }
+
+  if (response.status === 401 && allowUnauthorized) {
+    await response.text()
+    csrfToken = ''
+    return unauthorized
+  }
+  if (response.status === 204) return null
+
+  const contentType = response.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) {
+    throw new Error('后台 API 返回了网页内容，请检查 /api 反向代理配置')
+  }
+
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`)
+  return data
 }
 
-export function setAdminToken(token) {
-  if (token) sessionStorage.setItem(TOKEN_KEY, token)
-  else sessionStorage.removeItem(TOKEN_KEY)
+export async function loginAdmin(password) {
+  const data = await request('/api/admin/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  csrfToken = data.csrfToken
+  return data
 }
 
-export function createAdminApi(getToken, onUnauthorized) {
+export async function restoreAdminSession() {
+  const data = await request('/api/admin/auth/session', {}, true)
+  if (data === unauthorized) return false
+  csrfToken = data?.csrfToken || ''
+  return Boolean(data?.authenticated)
+}
+
+export async function logoutAdmin() {
+  if (!csrfToken) return
+  const result = await request('/api/admin/auth/logout', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+  }, true)
+  csrfToken = ''
+  return result !== unauthorized
+}
+
+export function createAdminApi(onUnauthorized) {
   return async function adminApi(path, options = {}) {
     const headers = new Headers(options.headers || {})
-    headers.set('Authorization', `Bearer ${getToken()}`)
+    const method = String(options.method || 'GET').toUpperCase()
 
     if (options.body && !(options.body instanceof FormData)) {
       headers.set('Content-Type', 'application/json')
     }
-
-    let response
-    try {
-      response = await fetch(path, { ...options, headers })
-    } catch {
-      throw new Error('无法连接后台 API，请检查内容服务是否已启动')
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      headers.set('X-CSRF-Token', csrfToken)
     }
 
-    if (response.status === 401) {
-      setAdminToken('')
+    const data = await request(path, { ...options, method, headers }, true)
+    if (data === unauthorized) {
       onUnauthorized?.()
-      throw new Error('管理令牌无效')
+      throw new Error('管理会话无效或已过期')
     }
-
-    if (response.status === 204) return null
-
-    const contentType = response.headers.get('content-type') || ''
-    if (!contentType.includes('application/json')) {
-      throw new Error('后台 API 返回了网页内容，请检查 /api 反向代理配置')
-    }
-
-    const data = await response.json()
-    if (!response.ok) {
-      throw new Error(data.error || `请求失败（${response.status}）`)
-    }
-
     return data
   }
 }
