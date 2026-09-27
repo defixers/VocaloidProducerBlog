@@ -114,6 +114,19 @@ function storedZip(filename, content) {
 try {
   await waitForServer()
   const session = await login()
+  const articleHeaders = {
+    Origin: origin,
+    Cookie: session.cookie,
+    'X-CSRF-Token': session.csrfToken,
+    'Content-Type': 'application/json',
+  }
+  const articleRequests = ['并发文章甲', '并发文章乙'].map((title) => fetch(url('/api/admin/articles'), {
+    method: 'POST',
+    headers: articleHeaders,
+    body: JSON.stringify({ title, markdown: `## ${title}`, status: 'draft' }),
+  }))
+  const articleResponses = await Promise.all(articleRequests)
+  assert.deepEqual(articleResponses.map((response) => response.status), [201, 201])
   const midi = Buffer.concat([Buffer.from('MThd'), Buffer.from([0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xe0])])
 
   const accepted = await upload(session, midi, '奇迹从来没出现人声.mid', 'audio/midi')
@@ -191,8 +204,9 @@ try {
   assert.match(serverOutput, /"event":"admin_resource_delete","outcome":"succeeded"/)
   assert.ok(!serverOutput.includes(password))
 
-  const files = JSON.parse(await readFile(join(storageRoot, 'data', 'content.json'), 'utf8')).resources
-  assert.equal(files.length, 4)
+  const storedContent = JSON.parse(await readFile(join(storageRoot, 'data', 'content.json'), 'utf8'))
+  assert.equal(storedContent.resources.length, 4)
+  assert.equal(storedContent.articles.length, 2)
   console.log('Upload security integration tests passed.')
 } finally {
   server.kill()

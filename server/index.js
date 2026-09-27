@@ -43,7 +43,7 @@ const activeAdminWrites = new Map()
 const loginFailureLimit = 10000
 let activeLoginAttempts = 0
 let activeUploads = 0
-let resourceMutationQueue = Promise.resolve()
+let contentMutationQueue = Promise.resolve()
 const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || (isProduction ? 1 : 0))
 const loginWindowMs = positiveNumber('ADMIN_LOGIN_WINDOW_MINUTES', 15) * 60 * 1000
 const loginIpLimit = positiveInteger('ADMIN_LOGIN_IP_LIMIT', 10)
@@ -222,10 +222,10 @@ async function scanUpload(filePath, extension) {
   }
 }
 
-async function withResourceMutation(operation) {
-  const previous = resourceMutationQueue
+async function withContentMutation(operation) {
+  const previous = contentMutationQueue
   let release
-  resourceMutationQueue = new Promise((resolveQueue) => { release = resolveQueue })
+  contentMutationQueue = new Promise((resolveQueue) => { release = resolveQueue })
   await previous
   try {
     return await operation()
@@ -889,9 +889,11 @@ app.post('/api/admin/articles', ...protectAdminWrite, async (request, response, 
     if (!article.title || !article.markdown) {
       return response.status(400).json({ error: '标题和 Markdown 正文不能为空' })
     }
-    const content = await readContent()
-    content.articles.unshift(article)
-    await saveContent(content)
+    await withContentMutation(async () => {
+      const content = await readContent()
+      content.articles.unshift(article)
+      await saveContent(content)
+    })
     response.status(201).json(article)
   } catch (error) {
     next(error)
@@ -900,16 +902,21 @@ app.post('/api/admin/articles', ...protectAdminWrite, async (request, response, 
 
 app.put('/api/admin/articles/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
-    const content = await readContent()
-    const index = content.articles.findIndex((article) => article.id === request.params.id)
-    if (index === -1) return response.status(404).json({ error: '文章不存在' })
-    const article = normalizeArticle(request.body, content.articles[index])
-    if (!article.title || !article.markdown) {
-      return response.status(400).json({ error: '标题和 Markdown 正文不能为空' })
-    }
-    content.articles[index] = article
-    await saveContent(content)
-    response.json(article)
+    const result = await withContentMutation(async () => {
+      const content = await readContent()
+      const index = content.articles.findIndex((item) => item.id === request.params.id)
+      if (index === -1) return { status: 'missing' }
+      const nextArticle = normalizeArticle(request.body, content.articles[index])
+      if (!nextArticle.title || !nextArticle.markdown) {
+        return { status: 'invalid' }
+      }
+      content.articles[index] = nextArticle
+      await saveContent(content)
+      return { status: 'saved', article: nextArticle }
+    })
+    if (result.status === 'missing') return response.status(404).json({ error: '文章不存在' })
+    if (result.status === 'invalid') return response.status(400).json({ error: '标题和 Markdown 正文不能为空' })
+    response.json(result.article)
   } catch (error) {
     next(error)
   }
@@ -917,13 +924,15 @@ app.put('/api/admin/articles/:id', ...protectAdminWrite, async (request, respons
 
 app.delete('/api/admin/articles/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
-    const content = await readContent()
-    const nextArticles = content.articles.filter((article) => article.id !== request.params.id)
-    if (nextArticles.length === content.articles.length) {
-      return response.status(404).json({ error: '文章不存在' })
-    }
-    content.articles = nextArticles
-    await saveContent(content)
+    const deleted = await withContentMutation(async () => {
+      const content = await readContent()
+      const nextArticles = content.articles.filter((article) => article.id !== request.params.id)
+      if (nextArticles.length === content.articles.length) return false
+      content.articles = nextArticles
+      await saveContent(content)
+      return true
+    })
+    if (!deleted) return response.status(404).json({ error: '文章不存在' })
     response.status(204).end()
   } catch (error) {
     next(error)
@@ -949,7 +958,7 @@ app.post('/api/admin/resources', ...protectAdminWrite, uploadRateLimiter, limitU
       scanStatus,
       createdAt: now,
     }
-    await withResourceMutation(async () => {
+    await withContentMutation(async () => {
       if (await uploadDirectorySize() > uploadTotalQuotaBytes) {
         throw new UploadSecurityError('storage_quota_exceeded', '资源存储空间已满', 413)
       }
@@ -972,7 +981,7 @@ app.post('/api/admin/resources', ...protectAdminWrite, uploadRateLimiter, limitU
 
 app.delete('/api/admin/resources/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
-    const result = await withResourceMutation(async () => {
+    const result = await withContentMutation(async () => {
       const content = await readContent()
       const resource = content.resources.find((item) => item.id === request.params.id)
       if (!resource) return null
