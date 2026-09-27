@@ -19,6 +19,9 @@ const adminToken = process.env.ADMIN_TOKEN || (isProduction ? '' : 'utopia-dev')
 const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
 const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
 const bilibiliCache = { expiresAt: 0, payload: null }
+const bilibiliImageCache = new Map()
+const bilibiliImageCacheLimit = 32 * 1024 * 1024
+let bilibiliImageCacheSize = 0
 const wbiKeyCache = { expiresAt: 0, key: '' }
 const wbiMixinTable = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
@@ -150,6 +153,49 @@ function parseBilibiliImageUrl(value) {
   const allowed = hostname.endsWith('.hdslb.com') || hostname.endsWith('.biliimg.com')
   if (url.protocol !== 'https:' || !allowed) throw new Error('Invalid Bilibili image URL')
   return url
+}
+
+function optimizedBilibiliImageUrl(value) {
+  const url = parseBilibiliImageUrl(value)
+  if (url.pathname.startsWith('/bfs/archive/') && !/@\d+w_\d+h_/.test(url.pathname)) {
+    url.pathname = `${url.pathname}@960w_540h_1c.webp`
+  }
+  return url
+}
+
+function getCachedBilibiliImage(key) {
+  const entry = bilibiliImageCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    bilibiliImageCache.delete(key)
+    bilibiliImageCacheSize -= entry.body.length
+    return null
+  }
+  bilibiliImageCache.delete(key)
+  bilibiliImageCache.set(key, entry)
+  return entry
+}
+
+function cacheBilibiliImage(key, entry) {
+  if (entry.body.length > bilibiliImageCacheLimit) return
+  while (bilibiliImageCache.size >= 64 || bilibiliImageCacheSize + entry.body.length > bilibiliImageCacheLimit) {
+    const oldestKey = bilibiliImageCache.keys().next().value
+    const oldest = bilibiliImageCache.get(oldestKey)
+    bilibiliImageCache.delete(oldestKey)
+    bilibiliImageCacheSize -= oldest.body.length
+  }
+  bilibiliImageCache.set(key, entry)
+  bilibiliImageCacheSize += entry.body.length
+}
+
+function sendBilibiliImage(response, image, cacheStatus) {
+  response.set({
+    'Cache-Control': 'public, max-age=604800, immutable, stale-while-revalidate=2592000',
+    'Content-Type': image.contentType,
+    'Content-Length': image.body.length,
+    'X-Image-Cache': cacheStatus,
+  })
+  response.send(image.body)
 }
 
 function proxiedBilibiliImageUrl(value) {
@@ -287,7 +333,10 @@ app.get('/api/health', (_request, response) => {
 
 app.get('/api/bilibili/image', async (request, response) => {
   try {
-    const imageUrl = parseBilibiliImageUrl(request.query.url)
+    const imageUrl = optimizedBilibiliImageUrl(request.query.url)
+    const cached = getCachedBilibiliImage(imageUrl.href)
+    if (cached) return sendBilibiliImage(response, cached, 'HIT')
+
     const upstream = await fetch(imageUrl, {
       headers: {
         Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
@@ -305,13 +354,9 @@ app.get('/api/bilibili/image', async (request, response) => {
     if (contentLength > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
     const body = Buffer.from(await upstream.arrayBuffer())
     if (body.length > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
-
-    response.set({
-      'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
-      'Content-Type': contentType,
-      'Content-Length': body.length,
-    })
-    response.send(body)
+    const image = { body, contentType, expiresAt: Date.now() + 6 * 60 * 60 * 1000 }
+    cacheBilibiliImage(imageUrl.href, image)
+    sendBilibiliImage(response, image, 'MISS')
   } catch (error) {
     console.error('Bilibili image proxy failed:', error.message)
     response.status(502).json({ error: 'Bilibili image unavailable' })
