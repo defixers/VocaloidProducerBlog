@@ -7,9 +7,6 @@ import {
   Download, ExternalLink, Menu, Music2,
   Play, Search, Sparkles, X, Zap
 } from 'lucide-vue-next'
-import {
-  videos as fallbackVideos,
-} from './data'
 import { fetchBilibiliFeed } from './services/bilibili'
 
 const activeSection = ref('home')
@@ -21,9 +18,10 @@ const downloaded = ref(null)
 const articleFilter = ref('全部')
 const articles = ref([])
 const assets = ref([])
-const videos = ref(fallbackVideos)
+const videos = ref([])
 const dynamics = ref([])
-const syncState = ref('等待同步')
+const videoSyncState = ref('等待同步')
+const dynamicSyncState = ref('等待同步')
 const bilibiliSpaceUrl = import.meta.env.VITE_BILIBILI_SPACE_URL || 'https://space.bilibili.com/1858510441'
 
 const nav = [
@@ -103,17 +101,20 @@ onMounted(async () => {
   try {
     const feed = await fetchBilibiliFeed()
     if (!feed) return
-    if (feed.videos.length) videos.value = feed.videos
+    videos.value = feed.videos
     dynamics.value = feed.dynamics
-    syncState.value = feed.unavailable
-      ? '同步暂不可用'
-      : feed.stale
-        ? '缓存内容'
-        : feed.dynamics.length ? '刚刚同步' : '暂无动态'
+    videoSyncState.value = feed.videoStale
+      ? '缓存内容'
+      : feed.videoUnavailable ? '同步暂不可用' : feed.videos.length ? '刚刚同步' : '暂无投稿'
+    dynamicSyncState.value = feed.dynamicStale
+      ? '缓存内容'
+      : feed.dynamicUnavailable ? '同步暂不可用' : feed.dynamics.length ? '刚刚同步' : '暂无动态'
   } catch (error) {
     console.info('Bilibili sync unavailable.', error)
+    videos.value = []
     dynamics.value = []
-    syncState.value = '同步暂不可用'
+    videoSyncState.value = '同步暂不可用'
+    dynamicSyncState.value = '同步暂不可用'
   }
 })
 </script>
@@ -188,14 +189,15 @@ onMounted(async () => {
         <div class="section-wrap">
           <div class="section-heading light">
             <div><span class="eyebrow">BILIBILI ARCHIVE / 02</span><h2>不存在之地的歌</h2></div>
-            <div class="sync-badge"><span></span> 自动同步 · {{ syncState }}</div>
+            <div class="sync-badge"><span></span> 自动同步 · {{ videoSyncState }}</div>
           </div>
-          <div class="video-grid">
+          <div v-if="videos.length" class="video-grid">
             <a v-for="video in videos.slice(0, 3)" :key="video.id" class="video-card" :href="`https://www.bilibili.com/video/${video.id}`" target="_blank" rel="noreferrer">
               <div class="video-cover"><img :src="video.cover" :srcset="imageSrcset(video.cover)" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" width="1600" height="900" loading="lazy" decoding="async" :alt="video.title" /><span class="duration">{{ video.duration }}</span><span class="play-overlay"><CirclePlay :size="42" /></span></div>
               <div class="video-info"><small>{{ video.id }} · {{ video.date }}</small><h3>{{ video.title }}</h3><p>{{ video.stats }}</p></div>
             </a>
           </div>
+          <p v-else class="video-empty">{{ videoSyncState }}</p>
           <button class="outline-button" @click="go('videos')">进入视频档案 <ChevronRight :size="18" /></button>
         </div>
       </section>
@@ -222,7 +224,7 @@ onMounted(async () => {
         <div class="section-wrap dynamic-grid">
           <div class="dynamic-title"><span class="pulse-dot"></span><h2>此刻动态</h2><p>来自 BILIBILI</p></div>
           <div v-for="dynamic in dynamics" :key="dynamic.id || `${dynamic.time}-${dynamic.text}`" class="dynamic-item"><span>{{ dynamic.time }}</span><p>{{ dynamic.text }}</p><b>{{ dynamic.topic }}</b></div>
-          <p v-if="!dynamics.length" class="dynamic-empty">{{ syncState }}</p>
+          <p v-if="!dynamics.length" class="dynamic-empty">{{ dynamicSyncState }}</p>
         </div>
       </section>
     </main>
@@ -258,6 +260,7 @@ onMounted(async () => {
         <a v-for="(video, i) in videos" :key="video.id" :href="`https://www.bilibili.com/video/${video.id}`" target="_blank" rel="noreferrer">
           <span class="video-no">0{{ i + 1 }}</span><div class="video-cover"><img :src="video.cover" :srcset="imageSrcset(video.cover)" sizes="(max-width: 560px) calc(100vw - 72px), 270px" width="1600" height="900" loading="lazy" decoding="async" :alt="video.title"/><span class="play-overlay"><CirclePlay :size="46"/></span></div><div><small>{{ video.id }} / {{ video.date }}</small><h2>{{ video.title }}</h2><p>{{ video.stats }}</p></div><ExternalLink class="external"/>
         </a>
+        <p v-if="!videos.length" class="video-empty archive-empty">{{ videoSyncState }}</p>
       </section>
     </main>
 

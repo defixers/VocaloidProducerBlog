@@ -15,5 +15,9 @@ export async function fetchBilibiliFeed() {
     syncedAt: data.syncedAt || new Date().toISOString(),
     stale: Boolean(data.stale),
     unavailable: Boolean(data.unavailable),
+    videoUnavailable: Boolean(data.videoUnavailable),
+    dynamicUnavailable: Boolean(data.dynamicUnavailable),
+    videoStale: Boolean(data.videoStale || data.stale),
+    dynamicStale: Boolean(data.dynamicStale || data.stale),
   }
 }

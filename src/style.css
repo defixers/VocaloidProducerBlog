@@ -81,6 +81,7 @@ a { color: inherit; text-decoration: none; }
 .sync-badge { font-size: 11px; color: #aaa; }
 .sync-badge span { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 0 4px rgba(223,79,59,.16); }
 .video-grid { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 18px; }
+.video-empty { min-height: 220px; margin: 0; display: grid; place-items: center; border-block: 1px solid #343737; color: #929792; font-size: 13px; }
 .video-card { background: #181a1a; border-bottom: 2px solid #313433; }
 .video-card:hover { border-color: var(--acid); }
 .video-cover { position: relative; aspect-ratio: 16/9; overflow: hidden; background: #222; }
@@ -172,6 +173,7 @@ a { color: inherit; text-decoration: none; }
 .video-archive p { margin: 0; color: #8f948e; font-size: 12px; }
 .video-archive .external { color: #777; }
 .video-archive a:hover .external { color: var(--acid); }
+.video-archive .archive-empty { min-height: 300px; }
 
 .asset-head { display: flex; justify-content: space-between; align-items: end; }
 .asset-head > svg { color: var(--coral); }

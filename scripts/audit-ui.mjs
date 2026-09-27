@@ -80,6 +80,15 @@ try {
     if (invalidCover) throw new Error('Article archive cover ratio is invalid')
     await inspect(page, `${device.name}-articles`)
 
+    if (device.viewport.width <= 820) {
+      await page.locator('.menu-button').click()
+      await page.locator('.mobile-nav button').filter({ hasText: '视频' }).click()
+    } else {
+      await page.locator('.desktop-nav button').filter({ hasText: '视频' }).click()
+    }
+    await page.getByRole('heading', { name: '作品时间线' }).waitFor()
+    await inspect(page, `${device.name}-videos`)
+
     await page.goto('http://127.0.0.1:5173/admin')
     await inspect(page, `${device.name}-login`)
     await page.getByLabel('管理令牌').fill('utopia-dev')

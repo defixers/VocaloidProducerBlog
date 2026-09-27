@@ -97,7 +97,7 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 
 ## Bilibili 同步
 
-主站默认读取同源 `/api/bilibili/feed`。Express 服务端会获取 `BILIBILI_UID` 对应的空间动态，提取最近三条内容并缓存 10 分钟，浏览器不会直接请求 Bilibili。
+主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。浏览器不会直接请求 Bilibili。
 
 Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况，可以在 `.env` 的 `BILIBILI_COOKIE` 中配置有效的服务端 Cookie 后重启服务。该变量不能添加 `VITE_` 前缀，也不要提交到 Git。
 
@@ -106,7 +106,16 @@ Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况
 ```json
 {
   "syncedAt": "2026-09-26T14:20:00+08:00",
-  "videos": [],
+  "videos": [
+    {
+      "id": "BV...",
+      "title": "视频标题",
+      "stats": "12.8万播放 · 902弹幕",
+      "date": "2026-09-26",
+      "cover": "https://i0.hdslb.com/...",
+      "duration": "04:12"
+    }
+  ],
   "dynamics": [
     {
       "id": "动态 ID",
@@ -118,7 +127,7 @@ Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况
 }
 ```
 
-同步成功后“此刻动态”会替换为真实内容。同步失败时接口返回带 `unavailable` 标志的空结果；有历史缓存则返回带 `stale` 标志的最近内容。页面会显示对应状态，不会使用示例动态。首页视频仍使用 `src/data.js` 的本地数据。
+同步成功后，首页视频、视频档案和“此刻动态”都会使用真实内容。视频与动态分别通过 `videoUnavailable`、`dynamicUnavailable`、`videoStale` 和 `dynamicStale` 标记同步状态，单项失败不会影响另一项。页面不会使用本地示例视频或动态。
 
 ## 图片优化
 
@@ -201,5 +210,4 @@ src/
   services/             后台 API 与 Bilibili 同步客户端
   AdminApp.vue          管理后台
   App.vue               主站
-  data.js               内置文章、视频、动态和资源数据
 ```
