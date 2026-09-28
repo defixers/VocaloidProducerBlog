@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import {
   ArrowLeft, Check, ChevronRight, FileText, FolderDown, LayoutDashboard,
   LogOut, Menu, Pencil, Plus, Save, Trash2, Upload, X, Zap,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { createAdminApi, loginAdmin, logoutAdmin, restoreAdminSession } from './services/admin.js'
 import { renderMarkdown } from './security/markdown.js'
 

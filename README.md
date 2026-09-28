@@ -23,10 +23,10 @@
 
 ## 快速开始
 
-需要 Node.js 24.7 或更高版本，以使用内置 Argon2id 密码哈希。
+需要 Node.js 24.21.x 和 npm 11.19.0。项目会校验工具链版本，并使用 Node.js 内置 Argon2id 密码哈希。
 
 ```bash
-npm install
+npm ci
 npm run dev:full
 ```
 
@@ -224,11 +224,19 @@ npm run optimize:images
 ## 构建与部署
 
 ```bash
-npm run build
+npm ci
+npm run verify:reproducible
+npm run verify:build
 npm start
 ```
 
-`npm run build` 生成 `dist/`。`npm start` 启动 Express，并在同一端口提供 API、受控资源下载和构建后的单页应用，默认地址为 `http://127.0.0.1:8787`。
+`npm ci` 严格按锁文件安装依赖。`npm run verify:reproducible` 连续构建两次并比较全部文件的 SHA-256，成功后在 `dist/` 留下生产产物。`dist/build-info.json` 记录完整 Git 提交 SHA 和构建时工作区状态；`npm run verify:build` 只接受来自当前提交且工作区干净的产物。`npm start` 启动 Express，并在同一端口提供 API、受控资源下载和构建后的单页应用，默认地址为 `http://127.0.0.1:8787`。
+
+生产构建必须从干净的 Git 检出执行。运行时数据应通过 `APP_STORAGE_ROOT` 放在仓库外，避免 `server/data/content.json` 的生产修改污染构建来源。发布预构建产物时，应将部署记录中的提交传给校验命令：
+
+```bash
+DEPLOY_COMMIT=完整的40位Git提交SHA npm run verify:build
+```
 
 生产环境建议：
 
@@ -363,11 +371,22 @@ npm run test:auth      # 后台认证与限流集成测试
 npm run test:uploads   # 上传、扫描、下载与删除安全集成测试
 npm run test:public    # SSRF、重定向、响应上限和超时安全测试
 npm run test:content   # 内容 Schema、版本冲突与 Markdown XSS 测试
+npm run security:supply-chain # 精确版本、锁文件、许可证、弃用和来源检查
+npm run verify:reproducible   # 双构建文件哈希一致性检查
+npm run verify:build          # 构建产物 Git SHA 与工作区状态检查
 npm run security:secrets
 npm run optimize:images
 ```
 
 `audit:ui` 使用本机 Microsoft Edge，截图保存在 `.screenshots/`，并检查横向溢出、控制台错误、后台粘性导航和切页滚动位置。
+
+## 供应链安全
+
+项目固定 Node.js 主版本、npm 版本及所有直接依赖版本，并提交 npm v3 锁文件。`.npmrc` 固定使用官方 registry；已弃用的 `lucide-vue-next` 已替换为 `@lucide/vue`。许可证白名单、弃用标记、包来源和完整性字段由 `security:supply-chain` 检查。
+
+GitHub Actions 对每次 `main` 推送和 Pull Request 执行 `npm ci`、完整依赖审计、敏感文件检查、全部安全测试、双构建一致性检查及构建来源验证。CodeQL 额外执行 JavaScript/TypeScript 扩展安全查询，Dependabot 每周检查 npm 依赖、每月检查 Actions。所有 Actions 均固定到完整提交 SHA。
+
+在 GitHub 分支保护中将 `Security and reproducible build / verify` 和 `CodeQL / analyze` 设置为 `main` 的必需检查，使新增高危漏洞或静态分析失败直接阻止合并。CI 产物名称包含提交 SHA，并保留 14 天。
 
 ## 项目结构
 

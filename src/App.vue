@@ -4,7 +4,7 @@ import {
   ArrowDownToLine, ArrowRight, Box, Check, ChevronRight, CirclePlay, Clock3,
   Download, ExternalLink, Menu, Music2,
   Play, Search, Sparkles, X, Zap
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { fetchBilibiliFeed } from './services/bilibili'
 import { renderMarkdown } from './security/markdown.js'
 

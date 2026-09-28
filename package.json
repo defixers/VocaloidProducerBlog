@@ -4,8 +4,21 @@
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
+  "packageManager": "npm@11.19.0",
   "engines": {
-    "node": ">=24.7.0"
+    "node": "24.21.x"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.21.0",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "11.19.0",
+      "onFail": "error"
+    }
   },
   "scripts": {
     "dev": "vite",
@@ -13,6 +26,8 @@
     "server": "node server/index.js",
     "start": "node server/index.js",
     "build": "vite build",
+    "verify:build": "node scripts/verify-build.mjs",
+    "verify:reproducible": "node scripts/check-reproducible-build.mjs",
     "preview": "vite preview",
     "optimize:images": "node scripts/optimize-images.mjs",
     "audit:ui": "node scripts/audit-ui.mjs",
@@ -20,25 +35,26 @@
     "test:uploads": "node scripts/test-upload-security.mjs",
     "test:public": "node scripts/test-public-security.mjs",
     "test:content": "node scripts/test-content-security.mjs",
+    "security:supply-chain": "node scripts/check-supply-chain.mjs",
     "security:secrets": "node scripts/check-sensitive-files.mjs",
     "security:hash-password": "node scripts/hash-admin-password.mjs"
   },
   "dependencies": {
-    "@vitejs/plugin-vue": "latest",
-    "dompurify": "^3.4.16",
-    "express": "^4.22.3",
+    "@lucide/vue": "1.48.0",
+    "@vitejs/plugin-vue": "6.0.9",
+    "dompurify": "3.4.16",
+    "express": "4.22.3",
     "express-rate-limit": "8.7.0",
-    "lucide-vue-next": "latest",
-    "marked": "^18.0.14",
-    "multer": "^2.4.0",
-    "vite": "latest",
-    "vue": "latest",
+    "marked": "18.0.14",
+    "multer": "2.4.0",
+    "vite": "8.3.1",
+    "vue": "3.5.43",
     "zod": "4.1.11"
   },
   "devDependencies": {
-    "concurrently": "^10.0.5",
+    "concurrently": "10.0.5",
     "jsdom": "30.1.1",
-    "playwright-core": "^1.63.0",
-    "sharp": "^0.35.4"
+    "playwright-core": "1.63.0",
+    "sharp": "0.35.4"
   }
 }
