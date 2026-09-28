@@ -98,16 +98,18 @@ try {
   assert.equal((await fetch(url('/api/admin/auth/session'), {
     headers: { Cookie: first.cookie },
   })).status, 200)
-  assert.equal((await fetch(url('/api/admin/content'), {
+  const adminContentResponse = await fetch(url('/api/admin/content'), {
     headers: { Cookie: first.cookie },
-  })).status, 200)
+  })
+  assert.equal(adminContentResponse.status, 200)
+  const contentVersion = (await adminContentResponse.json()).version
   assert.equal((await post('/api/admin/auth/logout', {
     headers: { Origin: origin, Cookie: first.cookie },
   })).status, 403)
   assert.equal((await post('/api/admin/auth/logout', {
     headers: { Origin: 'https://invalid.example', Cookie: first.cookie, 'X-CSRF-Token': first.csrfToken },
   })).status, 403)
-  const writeHeaders = { Origin: origin, Cookie: first.cookie, 'X-CSRF-Token': first.csrfToken }
+  const writeHeaders = { Origin: origin, Cookie: first.cookie, 'X-CSRF-Token': first.csrfToken, 'X-Content-Version': String(contentVersion) }
   assert.equal((await fetch(url('/api/admin/articles/missing'), {
     method: 'DELETE', headers: writeHeaders,
   })).status, 404)

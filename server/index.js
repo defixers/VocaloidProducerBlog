@@ -10,6 +10,14 @@ import { rateLimit } from 'express-rate-limit'
 import multer from 'multer'
 import { hashAdminPassword, isAdminPasswordHash, verifyAdminPassword } from './security/password.js'
 import {
+  ContentValidationError,
+  createArticleInputSchema,
+  parseContent,
+  parseInput,
+  parseServerEnv,
+  resourceInputSchema,
+} from './security/validation.js'
+import {
   UploadSecurityError,
   inspectUpload,
   requiresVirusScan,
@@ -23,20 +31,27 @@ const execFileAsync = promisify(execFile)
 const rootDir = resolve(import.meta.dirname, '..')
 const envFile = join(rootDir, '.env')
 if (existsSync(envFile)) loadEnvFile(envFile)
-const storageRoot = process.env.APP_STORAGE_ROOT ? resolve(process.env.APP_STORAGE_ROOT) : join(rootDir, 'server')
+const rawProduction = process.env.NODE_ENV === 'production'
+const env = parseServerEnv({
+  ...process.env,
+  APP_ORIGIN: process.env.APP_ORIGIN || (rawProduction
+    ? ''
+    : 'http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8787,http://localhost:8787'),
+  TRUST_PROXY_HOPS: process.env.TRUST_PROXY_HOPS || (rawProduction ? '1' : '0'),
+})
+const storageRoot = env.APP_STORAGE_ROOT ? resolve(env.APP_STORAGE_ROOT) : join(rootDir, 'server')
 const dataDir = join(storageRoot, 'data')
 const dataFile = join(dataDir, 'content.json')
 const uploadDir = join(storageRoot, 'uploads')
 const distDir = join(rootDir, 'dist')
-const port = Number(process.env.PORT || 8787)
-const isProduction = process.env.NODE_ENV === 'production'
-const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || (isProduction ? '' : await hashAdminPassword('utopia-dev'))
-const configuredOrigins = process.env.APP_ORIGIN || (isProduction
-  ? ''
-  : 'http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8787,http://localhost:8787')
-const allowedOrigins = new Set(configuredOrigins.split(',').map((value) => value.trim()).filter(Boolean).map((value) => new URL(value).origin))
-const sessionIdleMs = Number(process.env.ADMIN_SESSION_IDLE_MINUTES || 30) * 60 * 1000
-const sessionAbsoluteMs = Number(process.env.ADMIN_SESSION_ABSOLUTE_HOURS || 8) * 60 * 60 * 1000
+const port = env.PORT
+const isProduction = env.NODE_ENV === 'production'
+const adminPasswordHash = env.ADMIN_PASSWORD_HASH || (isProduction ? '' : await hashAdminPassword('utopia-dev'))
+const allowedOrigins = new Set(env.APP_ORIGIN)
+const articleImageHosts = new Set(env.ARTICLE_IMAGE_HOSTS)
+const articleInputSchema = createArticleInputSchema(articleImageHosts)
+const sessionIdleMs = env.ADMIN_SESSION_IDLE_MINUTES * 60 * 1000
+const sessionAbsoluteMs = env.ADMIN_SESSION_ABSOLUTE_HOURS * 60 * 60 * 1000
 const sessionCookieName = isProduction ? '__Host-utopia_admin_session' : 'utopia_admin_session'
 const adminSessions = new Map()
 const loginFailures = new Map()
@@ -47,49 +62,49 @@ let activeLoginAttempts = 0
 let activeUploads = 0
 let contentMutationQueue = Promise.resolve()
 let bilibiliFeedPending = null
-const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || (isProduction ? 1 : 0))
-const loginWindowMs = positiveNumber('ADMIN_LOGIN_WINDOW_MINUTES', 15) * 60 * 1000
-const loginIpLimit = positiveInteger('ADMIN_LOGIN_IP_LIMIT', 10)
-const loginAccountLimit = positiveInteger('ADMIN_LOGIN_ACCOUNT_LIMIT', 30)
-const loginBackoffBaseMs = positiveNumber('ADMIN_LOGIN_BACKOFF_BASE_MS', 500)
-const loginBackoffMaxMs = positiveNumber('ADMIN_LOGIN_BACKOFF_MAX_MS', 30000)
-const loginConcurrency = positiveInteger('ADMIN_LOGIN_CONCURRENCY', 2)
-const adminWriteWindowMs = positiveNumber('ADMIN_WRITE_WINDOW_MINUTES', 10) * 60 * 1000
-const adminWriteLimit = positiveInteger('ADMIN_WRITE_LIMIT', 60)
-const adminWriteConcurrency = positiveInteger('ADMIN_WRITE_CONCURRENCY', 2)
-const uploadWindowMs = positiveNumber('UPLOAD_WINDOW_MINUTES', 60) * 60 * 1000
-const uploadLimit = positiveInteger('UPLOAD_LIMIT', 10)
-const uploadConcurrency = positiveInteger('UPLOAD_CONCURRENCY', 1)
-const uploadMaxFileBytes = Math.floor(positiveNumber('UPLOAD_MAX_FILE_MB', 100) * 1024 * 1024)
-const uploadTotalQuotaBytes = Math.floor(positiveNumber('UPLOAD_TOTAL_QUOTA_MB', 1024) * 1024 * 1024)
+const trustProxyHops = env.TRUST_PROXY_HOPS
+const loginWindowMs = env.ADMIN_LOGIN_WINDOW_MINUTES * 60 * 1000
+const loginIpLimit = env.ADMIN_LOGIN_IP_LIMIT
+const loginAccountLimit = env.ADMIN_LOGIN_ACCOUNT_LIMIT
+const loginBackoffBaseMs = env.ADMIN_LOGIN_BACKOFF_BASE_MS
+const loginBackoffMaxMs = env.ADMIN_LOGIN_BACKOFF_MAX_MS
+const loginConcurrency = env.ADMIN_LOGIN_CONCURRENCY
+const adminWriteWindowMs = env.ADMIN_WRITE_WINDOW_MINUTES * 60 * 1000
+const adminWriteLimit = env.ADMIN_WRITE_LIMIT
+const adminWriteConcurrency = env.ADMIN_WRITE_CONCURRENCY
+const uploadWindowMs = env.UPLOAD_WINDOW_MINUTES * 60 * 1000
+const uploadLimit = env.UPLOAD_LIMIT
+const uploadConcurrency = env.UPLOAD_CONCURRENCY
+const uploadMaxFileBytes = Math.floor(env.UPLOAD_MAX_FILE_MB * 1024 * 1024)
+const uploadTotalQuotaBytes = Math.floor(env.UPLOAD_TOTAL_QUOTA_MB * 1024 * 1024)
 const archiveLimits = {
-  maxUncompressedBytes: Math.floor(positiveNumber('UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB', 512) * 1024 * 1024),
-  maxFiles: positiveInteger('UPLOAD_ARCHIVE_MAX_FILES', 1000),
-  maxDepth: positiveInteger('UPLOAD_ARCHIVE_MAX_DEPTH', 10),
-  maxCompressionRatio: positiveNumber('UPLOAD_ARCHIVE_MAX_RATIO', 100),
+  maxUncompressedBytes: Math.floor(env.UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB * 1024 * 1024),
+  maxFiles: env.UPLOAD_ARCHIVE_MAX_FILES,
+  maxDepth: env.UPLOAD_ARCHIVE_MAX_DEPTH,
+  maxCompressionRatio: env.UPLOAD_ARCHIVE_MAX_RATIO,
 }
-const virusScanCommand = String(process.env.UPLOAD_VIRUS_SCAN_COMMAND || '').trim()
-const virusScanArgs = stringArrayFromEnv('UPLOAD_VIRUS_SCAN_ARGS', ['--no-summary'])
-const virusScanTimeoutMs = positiveNumber('UPLOAD_SCAN_TIMEOUT_SECONDS', 60) * 1000
-const publicRateWindowMs = positiveNumber('PUBLIC_RATE_WINDOW_MINUTES', 10) * 60 * 1000
-const bilibiliFeedRateLimit = positiveInteger('BILIBILI_FEED_RATE_LIMIT', 60)
-const bilibiliImageRateLimit = positiveInteger('BILIBILI_IMAGE_RATE_LIMIT', 180)
-const resourceDownloadRateLimit = positiveInteger('RESOURCE_DOWNLOAD_RATE_LIMIT', 60)
-const bilibiliFeedConcurrency = positiveInteger('BILIBILI_FEED_CONCURRENCY', 4)
-const bilibiliImageConcurrency = positiveInteger('BILIBILI_IMAGE_CONCURRENCY', 8)
-const resourceDownloadConcurrency = positiveInteger('RESOURCE_DOWNLOAD_CONCURRENCY', 4)
-const bilibiliUpstreamTimeoutMs = positiveNumber('BILIBILI_UPSTREAM_TIMEOUT_SECONDS', 8) * 1000
-const bilibiliJsonMaxBytes = Math.floor(positiveNumber('BILIBILI_JSON_MAX_MB', 2) * 1024 * 1024)
-const bilibiliImageMaxBytes = Math.floor(positiveNumber('BILIBILI_IMAGE_MAX_MB', 5) * 1024 * 1024)
-const bilibiliRedirectLimit = positiveInteger('BILIBILI_REDIRECT_LIMIT', 3)
-const bilibiliImageCacheLimit = Math.floor(positiveNumber('BILIBILI_IMAGE_CACHE_MB', 32) * 1024 * 1024)
-const bilibiliImageCacheEntries = positiveInteger('BILIBILI_IMAGE_CACHE_ENTRIES', 64)
-const resourceDownloadMaxBytes = Math.floor(positiveNumber('RESOURCE_DOWNLOAD_MAX_MB', 100) * 1024 * 1024)
-const resourceDownloadTimeoutMs = positiveNumber('RESOURCE_DOWNLOAD_TIMEOUT_SECONDS', 120) * 1000
-const serverHeadersTimeoutMs = positiveNumber('SERVER_HEADERS_TIMEOUT_SECONDS', 15) * 1000
-const serverRequestTimeoutMs = positiveNumber('SERVER_REQUEST_TIMEOUT_SECONDS', 120) * 1000
-const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
-const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
+const virusScanCommand = env.UPLOAD_VIRUS_SCAN_COMMAND.trim()
+const virusScanArgs = env.UPLOAD_VIRUS_SCAN_ARGS
+const virusScanTimeoutMs = env.UPLOAD_SCAN_TIMEOUT_SECONDS * 1000
+const publicRateWindowMs = env.PUBLIC_RATE_WINDOW_MINUTES * 60 * 1000
+const bilibiliFeedRateLimit = env.BILIBILI_FEED_RATE_LIMIT
+const bilibiliImageRateLimit = env.BILIBILI_IMAGE_RATE_LIMIT
+const resourceDownloadRateLimit = env.RESOURCE_DOWNLOAD_RATE_LIMIT
+const bilibiliFeedConcurrency = env.BILIBILI_FEED_CONCURRENCY
+const bilibiliImageConcurrency = env.BILIBILI_IMAGE_CONCURRENCY
+const resourceDownloadConcurrency = env.RESOURCE_DOWNLOAD_CONCURRENCY
+const bilibiliUpstreamTimeoutMs = env.BILIBILI_UPSTREAM_TIMEOUT_SECONDS * 1000
+const bilibiliJsonMaxBytes = Math.floor(env.BILIBILI_JSON_MAX_MB * 1024 * 1024)
+const bilibiliImageMaxBytes = Math.floor(env.BILIBILI_IMAGE_MAX_MB * 1024 * 1024)
+const bilibiliRedirectLimit = env.BILIBILI_REDIRECT_LIMIT
+const bilibiliImageCacheLimit = Math.floor(env.BILIBILI_IMAGE_CACHE_MB * 1024 * 1024)
+const bilibiliImageCacheEntries = env.BILIBILI_IMAGE_CACHE_ENTRIES
+const resourceDownloadMaxBytes = Math.floor(env.RESOURCE_DOWNLOAD_MAX_MB * 1024 * 1024)
+const resourceDownloadTimeoutMs = env.RESOURCE_DOWNLOAD_TIMEOUT_SECONDS * 1000
+const serverHeadersTimeoutMs = env.SERVER_HEADERS_TIMEOUT_SECONDS * 1000
+const serverRequestTimeoutMs = env.SERVER_REQUEST_TIMEOUT_SECONDS * 1000
+const bilibiliUid = env.BILIBILI_UID
+const bilibiliCookie = env.BILIBILI_COOKIE
 const bilibiliCache = { expiresAt: 0, payload: null }
 const bilibiliImageCache = new Map()
 const bilibiliImagePending = new Map()
@@ -125,12 +140,7 @@ if (!allowedOrigins.size) {
 if (isProduction && [...allowedOrigins].some((origin) => !origin.startsWith('https://'))) {
   throw new Error('APP_ORIGIN must use HTTPS in production.')
 }
-if (!Number.isFinite(sessionIdleMs) || sessionIdleMs <= 0 || !Number.isFinite(sessionAbsoluteMs) || sessionAbsoluteMs <= 0) {
-  throw new Error('Admin session durations must be positive numbers.')
-}
-if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0) {
-  throw new Error('TRUST_PROXY_HOPS must be a non-negative integer.')
-}
+if (loginBackoffMaxMs < loginBackoffBaseMs) throw new Error('ADMIN_LOGIN_BACKOFF_MAX_MS 不能小于 ADMIN_LOGIN_BACKOFF_BASE_MS。')
 
 await mkdir(dataDir, { recursive: true })
 await mkdir(uploadDir, { recursive: true })
@@ -145,33 +155,6 @@ app.use((request, response, next) => {
 })
 app.use(express.json({ limit: '512kb' }))
 app.use('/uploads', (_request, response) => response.status(404).json({ error: '资源不存在' }))
-
-function positiveNumber(name, fallback) {
-  const value = Number(process.env[name] || fallback)
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number.`)
-  return value
-}
-
-function positiveInteger(name, fallback) {
-  const value = positiveNumber(name, fallback)
-  if (!Number.isInteger(value)) throw new Error(`${name} must be an integer.`)
-  return value
-}
-
-function stringArrayFromEnv(name, fallback) {
-  const source = process.env[name]
-  if (!source) return fallback
-  let value
-  try {
-    value = JSON.parse(source)
-  } catch {
-    throw new Error(`${name} must be a JSON string array.`)
-  }
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new Error(`${name} must be a JSON string array.`)
-  }
-  return value
-}
 
 function decodeUploadFilename(value) {
   const filename = String(value || '')
@@ -268,12 +251,13 @@ async function withContentMutation(operation) {
 
 async function readContent() {
   const raw = await readFile(dataFile, 'utf8')
-  return JSON.parse(raw)
+  return parseContent(JSON.parse(raw), articleImageHosts)
 }
 
 async function saveContent(content) {
   const temporaryFile = `${dataFile}.tmp`
-  await writeFile(temporaryFile, `${JSON.stringify(content, null, 2)}\n`, 'utf8')
+  const validatedContent = parseContent(content, articleImageHosts)
+  await writeFile(temporaryFile, `${JSON.stringify(validatedContent, null, 2)}\n`, 'utf8')
   await rename(temporaryFile, dataFile)
 }
 
@@ -550,23 +534,41 @@ const limitBilibiliFeedConcurrency = publicConcurrencyLimiter('bilibili-feed', b
 const limitBilibiliImageConcurrency = publicConcurrencyLimiter('bilibili-image', bilibiliImageConcurrency, 'bilibili_image_concurrency')
 const limitResourceDownloadConcurrency = publicConcurrencyLimiter('resource-download', resourceDownloadConcurrency, 'resource_download_concurrency')
 
-function normalizeArticle(input, existing = {}) {
+function buildArticle(input, existing = {}) {
   const now = new Date().toISOString()
   return {
     ...existing,
     id: existing.id || crypto.randomUUID(),
-    title: String(input.title || '').trim(),
-    type: String(input.type || '创作手记').trim(),
-    date: String(input.date || now.slice(0, 10)).trim(),
-    excerpt: String(input.excerpt || '').trim(),
-    readTime: String(input.readTime || '5 分钟').trim(),
-    color: String(input.color || '#df4f3b').trim(),
-    image: String(input.image || '/images/anti-utopia-1600.webp').trim(),
-    markdown: String(input.markdown || '').trim(),
-    status: input.status === 'published' ? 'published' : 'draft',
+    ...input,
     createdAt: existing.createdAt || now,
     updatedAt: now,
   }
+}
+
+class ContentConflictError extends Error {
+  constructor(version) {
+    super('内容已被其他操作更新，请刷新后重试')
+    this.name = 'ContentConflictError'
+    this.version = version
+  }
+}
+
+function expectedContentVersion(request) {
+  const source = request.get('X-Content-Version') || ''
+  if (!/^\d+$/.test(source)) throw new ContentValidationError('X-Content-Version 必须是非负整数')
+  const version = Number(source)
+  if (!Number.isSafeInteger(version)) throw new ContentValidationError('X-Content-Version 超出允许范围')
+  return version
+}
+
+function assertContentVersion(request, content) {
+  if (expectedContentVersion(request) !== content.version) throw new ContentConflictError(content.version)
+}
+
+async function persistContentMutation(content) {
+  content.version += 1
+  await saveContent(content)
+  return content.version
 }
 
 function normalizeDynamicText(value) {
@@ -1038,16 +1040,14 @@ app.get('/api/admin/content', authenticate, async (_request, response, next) => 
 
 app.post('/api/admin/articles', ...protectAdminWrite, async (request, response, next) => {
   try {
-    const article = normalizeArticle(request.body)
-    if (!article.title || !article.markdown) {
-      return response.status(400).json({ error: '标题和 Markdown 正文不能为空' })
-    }
-    await withContentMutation(async () => {
+    const article = buildArticle(parseInput(articleInputSchema, request.body))
+    const version = await withContentMutation(async () => {
       const content = await readContent()
+      assertContentVersion(request, content)
       content.articles.unshift(article)
-      await saveContent(content)
+      return persistContentMutation(content)
     })
-    response.status(201).json(article)
+    response.status(201).json({ article, version })
   } catch (error) {
     next(error)
   }
@@ -1057,19 +1057,16 @@ app.put('/api/admin/articles/:id', ...protectAdminWrite, async (request, respons
   try {
     const result = await withContentMutation(async () => {
       const content = await readContent()
+      assertContentVersion(request, content)
       const index = content.articles.findIndex((item) => item.id === request.params.id)
       if (index === -1) return { status: 'missing' }
-      const nextArticle = normalizeArticle(request.body, content.articles[index])
-      if (!nextArticle.title || !nextArticle.markdown) {
-        return { status: 'invalid' }
-      }
+      const nextArticle = buildArticle(parseInput(articleInputSchema, request.body), content.articles[index])
       content.articles[index] = nextArticle
-      await saveContent(content)
-      return { status: 'saved', article: nextArticle }
+      const version = await persistContentMutation(content)
+      return { status: 'saved', article: nextArticle, version }
     })
     if (result.status === 'missing') return response.status(404).json({ error: '文章不存在' })
-    if (result.status === 'invalid') return response.status(400).json({ error: '标题和 Markdown 正文不能为空' })
-    response.json(result.article)
+    response.json({ article: result.article, version: result.version })
   } catch (error) {
     next(error)
   }
@@ -1077,16 +1074,16 @@ app.put('/api/admin/articles/:id', ...protectAdminWrite, async (request, respons
 
 app.delete('/api/admin/articles/:id', ...protectAdminWrite, async (request, response, next) => {
   try {
-    const deleted = await withContentMutation(async () => {
+    const result = await withContentMutation(async () => {
       const content = await readContent()
+      assertContentVersion(request, content)
       const nextArticles = content.articles.filter((article) => article.id !== request.params.id)
-      if (nextArticles.length === content.articles.length) return false
+      if (nextArticles.length === content.articles.length) return null
       content.articles = nextArticles
-      await saveContent(content)
-      return true
+      return { version: await persistContentMutation(content) }
     })
-    if (!deleted) return response.status(404).json({ error: '文章不存在' })
-    response.status(204).end()
+    if (!result) return response.status(404).json({ error: '文章不存在' })
+    response.json(result)
   } catch (error) {
     next(error)
   }
@@ -1095,15 +1092,18 @@ app.delete('/api/admin/articles/:id', ...protectAdminWrite, async (request, resp
 app.post('/api/admin/resources', ...protectAdminWrite, uploadRateLimiter, limitUploadConcurrency, upload.single('file'), async (request, response, next) => {
   try {
     if (!request.file) return response.status(400).json({ error: '请选择上传文件' })
+    const fields = parseInput(resourceInputSchema, {
+      ...request.body,
+      name: request.body.name || request.file.originalname.replace(/\.[^.]+$/, ''),
+      meta: request.body.meta || `${Math.ceil(request.file.size / 1024)} KB`,
+    })
     const { extension } = request.uploadMetadata
     await inspectUpload(request.file.path, extension, archiveLimits)
     const scanStatus = await scanUpload(request.file.path, extension)
     const now = new Date().toISOString()
     const resource = {
       id: crypto.randomUUID(),
-      name: String(request.body.name || request.file.originalname).trim(),
-      meta: String(request.body.meta || `${Math.ceil(request.file.size / 1024)} KB`).trim(),
-      tag: String(request.body.tag || '二创资源').trim(),
+      ...fields,
       storagePath: `/uploads/${request.file.filename}`,
       downloadName: request.file.originalname,
       size: request.file.size,
@@ -1111,13 +1111,14 @@ app.post('/api/admin/resources', ...protectAdminWrite, uploadRateLimiter, limitU
       scanStatus,
       createdAt: now,
     }
-    await withContentMutation(async () => {
+    const version = await withContentMutation(async () => {
       if (await uploadDirectorySize() > uploadTotalQuotaBytes) {
         throw new UploadSecurityError('storage_quota_exceeded', '资源存储空间已满', 413)
       }
       const content = await readContent()
+      assertContentVersion(request, content)
       content.resources.unshift(resource)
-      await saveContent(content)
+      return persistContentMutation(content)
     })
     securityLog('admin_resource_upload', request, 'succeeded', {
       resourceId: resource.id,
@@ -1125,7 +1126,7 @@ app.post('/api/admin/resources', ...protectAdminWrite, uploadRateLimiter, limitU
       size: resource.size,
       scanStatus,
     })
-    response.status(201).json(serializeResource(resource))
+    response.status(201).json({ resource: serializeResource(resource), version })
   } catch (error) {
     if (request.file) await unlink(request.file.path).catch(() => {})
     next(error)
@@ -1136,6 +1137,7 @@ app.delete('/api/admin/resources/:id', ...protectAdminWrite, async (request, res
   try {
     const result = await withContentMutation(async () => {
       const content = await readContent()
+      assertContentVersion(request, content)
       const resource = content.resources.find((item) => item.id === request.params.id)
       if (!resource) return null
 
@@ -1153,7 +1155,7 @@ app.delete('/api/admin/resources/:id', ...protectAdminWrite, async (request, res
 
       content.resources = content.resources.filter((item) => item.id !== request.params.id)
       try {
-        await saveContent(content)
+        await persistContentMutation(content)
       } catch (error) {
         if (quarantined) await rename(quarantinedPath, filePath).catch(() => {})
         throw error
@@ -1164,14 +1166,14 @@ app.delete('/api/admin/resources/:id', ...protectAdminWrite, async (request, res
           securityLog('admin_resource_delete_cleanup', request, 'failed', { resourceId: resource.id })
         })
       }
-      return { resource, fileState: quarantined ? 'deleted' : 'missing' }
+      return { resource, fileState: quarantined ? 'deleted' : 'missing', version: content.version }
     })
     if (!result) return response.status(404).json({ error: '资源不存在' })
     securityLog('admin_resource_delete', request, 'succeeded', {
       resourceId: result.resource.id,
       fileState: result.fileState,
     })
-    response.status(204).end()
+    response.json({ version: result.version })
   } catch (error) {
     securityLog('admin_resource_delete', request, 'failed', { resourceId: request.params.id })
     next(error)
@@ -1183,6 +1185,12 @@ app.use('/api', (_request, response) => {
 })
 
 app.use((error, request, response, _next) => {
+  if (error instanceof ContentConflictError) {
+    return response.status(409).json({ error: error.message, version: error.version })
+  }
+  if (error instanceof ContentValidationError) {
+    return response.status(400).json({ error: error.message })
+  }
   if (error instanceof UploadSecurityError) {
     if (request.file?.path) unlink(request.file.path).catch(() => {})
     securityLog('admin_resource_upload', request, 'rejected', { reason: error.code })

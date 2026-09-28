@@ -19,6 +19,7 @@
     "test:auth": "node scripts/test-admin-auth.mjs",
     "test:uploads": "node scripts/test-upload-security.mjs",
     "test:public": "node scripts/test-public-security.mjs",
+    "test:content": "node scripts/test-content-security.mjs",
     "security:secrets": "node scripts/check-sensitive-files.mjs",
     "security:hash-password": "node scripts/hash-admin-password.mjs"
   },
@@ -31,10 +32,12 @@
     "marked": "^18.0.14",
     "multer": "^2.4.0",
     "vite": "latest",
-    "vue": "latest"
+    "vue": "latest",
+    "zod": "4.1.11"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",
+    "jsdom": "30.1.1",
     "playwright-core": "^1.63.0",
     "sharp": "^0.35.4"
   }

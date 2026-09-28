@@ -1,12 +1,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import {
   ArrowLeft, Check, ChevronRight, FileText, FolderDown, LayoutDashboard,
   LogOut, Menu, Pencil, Plus, Save, Trash2, Upload, X, Zap,
 } from 'lucide-vue-next'
 import { createAdminApi, loginAdmin, logoutAdmin, restoreAdminSession } from './services/admin.js'
+import { renderMarkdown } from './security/markdown.js'
 
 const loginPassword = ref('')
 const authenticated = ref(false)
@@ -44,7 +43,7 @@ const nav = [
   { id: 'resources', label: '二创资源', icon: FolderDown },
 ]
 
-const markdownPreview = computed(() => DOMPurify.sanitize(marked.parse(articleForm.markdown || '')))
+const markdownPreview = computed(() => renderMarkdown(articleForm.markdown))
 const publishedCount = computed(() => articles.value.filter((article) => article.status === 'published').length)
 const draftCount = computed(() => articles.value.filter((article) => article.status === 'draft').length)
 const api = createAdminApi(() => { authenticated.value = false })
@@ -95,6 +94,15 @@ function notify(text) {
   setTimeout(() => { message.value = '' }, 2400)
 }
 
+async function handleMutationError(requestError) {
+  if (requestError.status === 409) {
+    await loadContent()
+    error.value = `${requestError.message}；列表已刷新，请确认后再次保存`
+    return
+  }
+  error.value = requestError.message
+}
+
 function scrollToTop() {
   const root = document.documentElement
   const previousBehavior = root.style.scrollBehavior
@@ -133,17 +141,18 @@ async function saveArticle() {
   loading.value = true
   error.value = ''
   try {
-    const payload = JSON.stringify({ ...articleForm })
+    const { id, createdAt, updatedAt, ...editableArticle } = articleForm
+    const payload = JSON.stringify(editableArticle)
     const path = articleForm.id ? `/api/admin/articles/${articleForm.id}` : '/api/admin/articles'
     const method = articleForm.id ? 'PUT' : 'POST'
-    const saved = await api(path, { method, body: payload })
+    const { article: saved } = await api(path, { method, body: payload })
     const index = articles.value.findIndex((article) => article.id === saved.id)
     if (index === -1) articles.value.unshift(saved)
     else articles.value[index] = saved
     Object.assign(articleForm, saved)
     notify(saved.status === 'published' ? '文章已发布' : '草稿已保存')
   } catch (requestError) {
-    error.value = requestError.message
+    await handleMutationError(requestError)
   } finally {
     loading.value = false
   }
@@ -157,7 +166,7 @@ async function removeArticle(article) {
     editorOpen.value = false
     notify('文章已删除')
   } catch (requestError) {
-    error.value = requestError.message
+    await handleMutationError(requestError)
   }
 }
 
@@ -179,14 +188,14 @@ async function uploadResource() {
   formData.append('tag', resourceForm.tag)
   formData.append('meta', resourceForm.meta)
   try {
-    const saved = await api('/api/admin/resources', { method: 'POST', body: formData })
+    const { resource: saved } = await api('/api/admin/resources', { method: 'POST', body: formData })
     resources.value.unshift(saved)
     Object.assign(resourceForm, { name: '', tag: '二创资源', meta: '' })
     uploadFile.value = null
     if (resourceFileInput.value) resourceFileInput.value.value = ''
     notify('资源已上传并公开')
   } catch (requestError) {
-    error.value = requestError.message
+    await handleMutationError(requestError)
   } finally {
     loading.value = false
   }
@@ -199,7 +208,7 @@ async function removeResource(resource) {
     resources.value = resources.value.filter((item) => item.id !== resource.id)
     notify('资源已删除')
   } catch (requestError) {
-    error.value = requestError.message
+    await handleMutationError(requestError)
   }
 }
 

@@ -1,13 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import {
   ArrowDownToLine, ArrowRight, Box, Check, ChevronRight, CirclePlay, Clock3,
   Download, ExternalLink, Menu, Music2,
   Play, Search, Sparkles, X, Zap
 } from 'lucide-vue-next'
 import { fetchBilibiliFeed } from './services/bilibili'
+import { renderMarkdown } from './security/markdown.js'
 
 const activeSection = ref('home')
 const activeArticle = ref(null)
@@ -48,7 +47,7 @@ const globalResults = computed(() => {
 
 const articleHtml = computed(() => {
   if (!activeArticle.value?.markdown) return ''
-  return DOMPurify.sanitize(marked.parse(activeArticle.value.markdown))
+  return renderMarkdown(activeArticle.value.markdown)
 })
 
 function go(section) {

@@ -55,6 +55,7 @@ VITE_BILIBILI_SYNC_URL=/api/bilibili/feed
 VITE_BILIBILI_SPACE_URL=https://space.bilibili.com/1858510441
 NODE_ENV=production
 APP_ORIGIN=https://www.utopiap.top
+ARTICLE_IMAGE_HOSTS=
 ADMIN_PASSWORD_HASH=replace-with-output-of-npm-run-security-hash-password
 ADMIN_SESSION_IDLE_MINUTES=30
 ADMIN_SESSION_ABSOLUTE_HOURS=8
@@ -80,6 +81,7 @@ PORT=8787
 | --- | --- |
 | `ADMIN_PASSWORD_HASH` | 管理密码的 Argon2id 哈希；生产环境必须设置，不能填写明文密码 |
 | `APP_ORIGIN` | 允许发起管理写请求的 HTTPS Origin；不含路径，多个地址使用逗号分隔 |
+| `ARTICLE_IMAGE_HOSTS` | 可选的文章远程封面 HTTPS 域名白名单，多个域名使用逗号分隔；站内 `/images/` 路径始终允许 |
 | `ADMIN_SESSION_IDLE_MINUTES` | 管理会话空闲过期时间，默认 30 分钟 |
 | `ADMIN_SESSION_ABSOLUTE_HOURS` | 管理会话绝对过期时间，默认 8 小时 |
 | `ADMIN_LOGIN_WINDOW_MINUTES` | 登录限流统计窗口，默认 15 分钟 |
@@ -159,13 +161,13 @@ npm run security:secrets
 
 生产环境应安装并更新 ClamAV，将 `UPLOAD_VIRUS_SCAN_COMMAND` 设置为 `clamscan` 或其绝对路径。配置扫描器后，文件只有在同步扫描成功后才会写入公开资源列表；扫描器缺失或不可用时，ZIP、7Z 和 RAR 会默认拒绝。上传同时受到单文件大小、总容量、频率和并发限制。
 
-后台文章元数据保存在 `server/data/content.json`，上传文件保存在 `server/uploads/`。草稿不会通过公开接口返回。
+后台文章元数据保存在 `server/data/content.json`，上传文件保存在 `server/uploads/`。草稿不会通过公开接口返回。文章和资源表单会按统一 Schema 校验类型、长度和枚举值，并拒绝未知字段。内容写入携带版本号；当其他页面已先完成保存时，旧页面会收到冲突提示并刷新列表，不会静默覆盖新内容。
 
 ## Markdown 文章
 
 文章统一通过 `/admin` 后台使用 Markdown 编写，支持实时预览、草稿和发布。文章数据保存在 `server/data/content.json`，主站通过 `/api/content` 读取已发布内容，草稿不会公开显示。
 
-Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发布文章时，主站显示空状态。
+Markdown 渲染结果会经过 DOMPurify 清理，主站和后台预览共用固定的标签、属性及 URL 协议白名单。文章封面仅接受站内 `/images/` 路径，或 `ARTICLE_IMAGE_HOSTS` 明确允许的 HTTPS 域名。API 不可用或没有已发布文章时，主站显示空状态。
 
 ## 二创资源
 
@@ -360,6 +362,7 @@ npm run audit:ui       # 桌面、平板和手机界面审计
 npm run test:auth      # 后台认证与限流集成测试
 npm run test:uploads   # 上传、扫描、下载与删除安全集成测试
 npm run test:public    # SSRF、重定向、响应上限和超时安全测试
+npm run test:content   # 内容 Schema、版本冲突与 Markdown XSS 测试
 npm run security:secrets
 npm run optimize:images
 ```

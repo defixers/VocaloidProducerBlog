@@ -1,4 +1,5 @@
 let csrfToken = ''
+let contentVersion = null
 const unauthorized = Symbol('unauthorized')
 
 async function request(path, options = {}, allowUnauthorized = false) {
@@ -12,6 +13,7 @@ async function request(path, options = {}, allowUnauthorized = false) {
   if (response.status === 401 && allowUnauthorized) {
     await response.text()
     csrfToken = ''
+    contentVersion = null
     return unauthorized
   }
   if (response.status === 204) return null
@@ -22,7 +24,11 @@ async function request(path, options = {}, allowUnauthorized = false) {
   }
 
   const data = await response.json()
-  if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`)
+  if (!response.ok) {
+    const error = new Error(data.error || `请求失败（${response.status}）`)
+    error.status = response.status
+    throw error
+  }
   return data
 }
 
@@ -50,6 +56,7 @@ export async function logoutAdmin() {
     headers: { 'X-CSRF-Token': csrfToken },
   }, true)
   csrfToken = ''
+  contentVersion = null
   return result !== unauthorized
 }
 
@@ -63,6 +70,8 @@ export function createAdminApi(onUnauthorized) {
     }
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       headers.set('X-CSRF-Token', csrfToken)
+      if (contentVersion === null) throw new Error('内容版本尚未加载，请刷新后重试')
+      headers.set('X-Content-Version', String(contentVersion))
     }
 
     const data = await request(path, { ...options, method, headers }, true)
@@ -70,6 +79,7 @@ export function createAdminApi(onUnauthorized) {
       onUnauthorized?.()
       throw new Error('管理会话无效或已过期')
     }
+    if (Number.isSafeInteger(data?.version)) contentVersion = data.version
     return data
   }
 }

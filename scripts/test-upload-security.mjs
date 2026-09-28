@@ -77,8 +77,12 @@ async function upload(session, bytes, filename, type) {
       Origin: origin,
       Cookie: session.cookie,
       'X-CSRF-Token': session.csrfToken,
+      'X-Content-Version': String(session.version),
     },
     body,
+  }).then(async (response) => {
+    if (response.ok) session.version = (await response.clone().json()).version
+    return response
   })
 }
 
@@ -114,10 +118,14 @@ function storedZip(filename, content) {
 try {
   await waitForServer()
   const session = await login()
+  session.version = (await (await fetch(url('/api/admin/content'), {
+    headers: { Cookie: session.cookie },
+  })).json()).version
   const articleHeaders = {
     Origin: origin,
     Cookie: session.cookie,
     'X-CSRF-Token': session.csrfToken,
+    'X-Content-Version': String(session.version),
     'Content-Type': 'application/json',
   }
   const articleRequests = ['并发文章甲', '并发文章乙'].map((title) => fetch(url('/api/admin/articles'), {
@@ -126,12 +134,14 @@ try {
     body: JSON.stringify({ title, markdown: `## ${title}`, status: 'draft' }),
   }))
   const articleResponses = await Promise.all(articleRequests)
-  assert.deepEqual(articleResponses.map((response) => response.status), [201, 201])
+  assert.deepEqual(articleResponses.map((response) => response.status).sort(), [201, 409])
+  const savedArticleResponse = articleResponses.find((response) => response.status === 201)
+  session.version = (await savedArticleResponse.json()).version
   const midi = Buffer.concat([Buffer.from('MThd'), Buffer.from([0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xe0])])
 
   const accepted = await upload(session, midi, '奇迹从来没出现人声.mid', 'audio/midi')
   assert.equal(accepted.status, 201)
-  const resource = await accepted.json()
+  const { resource } = await accepted.json()
   assert.equal(resource.downloadName, '奇迹从来没出现人声.mid')
   assert.equal(resource.storagePath, undefined)
   assert.match(resource.downloadUrl, /^\/api\/resources\/.+\/download$/)
@@ -193,9 +203,10 @@ try {
 
   const deleted = await fetch(url(`/api/admin/resources/${resource.id}`), {
     method: 'DELETE',
-    headers: { Origin: origin, Cookie: session.cookie, 'X-CSRF-Token': session.csrfToken },
+    headers: { Origin: origin, Cookie: session.cookie, 'X-CSRF-Token': session.csrfToken, 'X-Content-Version': String(session.version) },
   })
-  assert.equal(deleted.status, 204)
+  assert.equal(deleted.status, 200)
+  session.version = (await deleted.json()).version
   assert.equal((await fetch(url(resource.downloadUrl))).status, 404)
 
   await new Promise((resolve) => setTimeout(resolve, 50))
@@ -206,7 +217,7 @@ try {
 
   const storedContent = JSON.parse(await readFile(join(storageRoot, 'data', 'content.json'), 'utf8'))
   assert.equal(storedContent.resources.length, 4)
-  assert.equal(storedContent.articles.length, 2)
+  assert.equal(storedContent.articles.length, 1)
   console.log('Upload security integration tests passed.')
 } finally {
   server.kill()
