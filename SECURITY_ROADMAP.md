@@ -23,7 +23,7 @@
 | 后台认证 | 已改为 Argon2id 管理密码与服务端短期会话，长期 Token 风险已消除 | 已完成 |
 | 登录防护 | 已实现 IP 与账户限流、指数退避、写接口配额和结构化安全日志 | 已完成 |
 | 上传校验 | 已联合校验扩展名、MIME、文件签名，并加入压缩包检查、病毒扫描和受控下载 | 已完成 |
-| 安全响应头 | 未建立统一 CSP、HSTS、点击劫持和 MIME 嗅探防护 | P1 |
+| 安全响应头 | 已部署 HTTPS 强制跳转，并启用 CSP、HSTS、点击劫持和 MIME 嗅探防护 | 已完成 |
 | SSRF | Bilibili 图片代理限制了域名，但仍需限制重定向并验证每一跳 | P1 |
 | 接口滥用 | 公开同步、图片代理和下载接口缺少频率及并发限制 | P1 |
 | 供应链 | 部分依赖使用 `latest`，版本不可复现，缺少持续漏洞检查 | P1 |
@@ -111,11 +111,14 @@
 
 #### 3.5 HTTPS 与安全响应头
 
-- 部署有效 TLS 证书并将 HTTP 永久重定向到 HTTPS。
-- 接入 Helmet 或等效中间件，配置 CSP、HSTS、`frame-ancestors`、`nosniff`、Referrer Policy 和 Permissions Policy。
-- CSP 从 Report-Only 模式开始收集违规，再切换为强制模式。
-- 管理页面禁止被 iframe 嵌入，生产环境关闭不必要的缓存。
-- 正确配置可信反向代理层级，避免伪造客户端 IP 影响限流和日志。
+实施状态：**已完成（2026-09-28）**
+
+- [x] 为生产域名部署有效 TLS 证书，主站与管理后台可通过 HTTPS 访问。
+- [x] 将所有 HTTP 请求永久重定向到 HTTPS，并验证不存在可绕过的明文入口。
+- [x] 接入 Helmet 或等效中间件，配置 CSP、HSTS、`frame-ancestors`、`nosniff`、Referrer Policy 和 Permissions Policy。
+- [x] CSP 从 Report-Only 模式开始收集违规，再切换为强制模式。
+- [x] 管理页面禁止被 iframe 嵌入，生产环境关闭不必要的缓存。
+- [x] 正确配置并验证可信反向代理层级，避免伪造客户端 IP 影响限流和日志。
 
 验收标准：
 
