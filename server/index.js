@@ -73,9 +73,6 @@ const serverRequestTimeoutMs = positiveNumber('SERVER_REQUEST_TIMEOUT_SECONDS', 
 const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
 const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
 const bilibiliCache = { expiresAt: 0, payload: null }
-const bilibiliImageCache = new Map()
-const bilibiliImageCacheLimit = 32 * 1024 * 1024
-let bilibiliImageCacheSize = 0
 const wbiKeyCache = { expiresAt: 0, key: '' }
 const wbiMixinTable = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
@@ -513,61 +510,22 @@ function bilibiliHeaders() {
   return headers
 }
 
-function parseBilibiliImageUrl(value) {
-  const url = new URL(String(value || ''))
-  const hostname = url.hostname.toLowerCase()
-  const allowed = hostname.endsWith('.hdslb.com') || hostname.endsWith('.biliimg.com')
-  if (url.protocol !== 'https:' || !allowed) throw new Error('Invalid Bilibili image URL')
-  return url
-}
+const bilibiliImageHost = /\.(?:hdslb|biliimg)\.com$/i
 
-function optimizedBilibiliImageUrl(value) {
-  const url = parseBilibiliImageUrl(value)
-  if (url.pathname.startsWith('/bfs/archive/') && !/@\d+w_\d+h_/.test(url.pathname)) {
-    url.pathname = `${url.pathname}@960w_540h_1c.webp`
+// 封面直连 B 站 CDN，服务端只统一协议、域名并去掉旧的 `@` 后缀；
+// 具体尺寸和格式由前端追加 `@672w_378h_1c.webp` 这类后缀，由 CDN 转换。
+function bilibiliCoverImageUrl(value) {
+  try {
+    const url = new URL(String(value || '').replace(/^\/\//, 'https://').replace(/^http:/i, 'https:'))
+    if (url.protocol !== 'https:' || !bilibiliImageHost.test(url.hostname)) {
+      throw new Error(`unsupported host ${url.hostname || '(empty)'}`)
+    }
+    url.pathname = url.pathname.replace(/@[^/]*$/, '')
+    return url.href
+  } catch (error) {
+    console.error('Skipped invalid Bilibili cover:', error.message)
+    return ''
   }
-  return url
-}
-
-function getCachedBilibiliImage(key) {
-  const entry = bilibiliImageCache.get(key)
-  if (!entry) return null
-  if (entry.expiresAt <= Date.now()) {
-    bilibiliImageCache.delete(key)
-    bilibiliImageCacheSize -= entry.body.length
-    return null
-  }
-  bilibiliImageCache.delete(key)
-  bilibiliImageCache.set(key, entry)
-  return entry
-}
-
-function cacheBilibiliImage(key, entry) {
-  if (entry.body.length > bilibiliImageCacheLimit) return
-  while (bilibiliImageCache.size >= 64 || bilibiliImageCacheSize + entry.body.length > bilibiliImageCacheLimit) {
-    const oldestKey = bilibiliImageCache.keys().next().value
-    const oldest = bilibiliImageCache.get(oldestKey)
-    bilibiliImageCache.delete(oldestKey)
-    bilibiliImageCacheSize -= oldest.body.length
-  }
-  bilibiliImageCache.set(key, entry)
-  bilibiliImageCacheSize += entry.body.length
-}
-
-function sendBilibiliImage(response, image, cacheStatus) {
-  response.set({
-    'Cache-Control': 'public, max-age=604800, immutable, stale-while-revalidate=2592000',
-    'Content-Type': image.contentType,
-    'Content-Length': image.body.length,
-    'X-Image-Cache': cacheStatus,
-  })
-  response.send(image.body)
-}
-
-function proxiedBilibiliImageUrl(value) {
-  if (!value) return ''
-  const url = parseBilibiliImageUrl(value)
-  return `/api/bilibili/image?url=${encodeURIComponent(url.href)}`
 }
 
 async function fetchBilibiliJson(url) {
@@ -688,45 +646,13 @@ async function fetchBilibiliVideos() {
     title: normalizeDynamicText(video.title),
     stats: `${formatBilibiliCount(video.play)}播放 · ${formatBilibiliCount(video.video_review)}弹幕`,
     date: formatBilibiliDate(video.created),
-    cover: proxiedBilibiliImageUrl(String(video.pic || '').replace(/^http:/, 'https:').replace(/^\/\//, 'https://')),
+    cover: bilibiliCoverImageUrl(video.pic),
     duration: video.length || '',
   })).filter((video) => video.id && video.title && video.cover)
 }
 
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
-})
-
-app.get('/api/bilibili/image', async (request, response) => {
-  try {
-    const imageUrl = optimizedBilibiliImageUrl(request.query.url)
-    const cached = getCachedBilibiliImage(imageUrl.href)
-    if (cached) return sendBilibiliImage(response, cached, 'HIT')
-
-    const upstream = await fetch(imageUrl, {
-      headers: {
-        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        Referer: 'https://www.bilibili.com/',
-        'User-Agent': bilibiliHeaders()['User-Agent'],
-      },
-      signal: AbortSignal.timeout(8000),
-    })
-    const contentType = upstream.headers.get('content-type') || ''
-    if (!upstream.ok || !contentType.startsWith('image/')) {
-      throw new Error(`Bilibili image request failed (${upstream.status})`)
-    }
-
-    const contentLength = Number(upstream.headers.get('content-length') || 0)
-    if (contentLength > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
-    const body = Buffer.from(await upstream.arrayBuffer())
-    if (body.length > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
-    const image = { body, contentType, expiresAt: Date.now() + 6 * 60 * 60 * 1000 }
-    cacheBilibiliImage(imageUrl.href, image)
-    sendBilibiliImage(response, image, 'MISS')
-  } catch (error) {
-    console.error('Bilibili image proxy failed:', error.message)
-    response.status(502).json({ error: 'Bilibili image unavailable' })
-  }
 })
 
 app.get('/api/bilibili/feed', async (_request, response) => {

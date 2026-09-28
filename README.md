@@ -10,6 +10,7 @@
 - 二创资源展示、上传、下载和删除
 - 桌面、平板和手机响应式管理界面
 - WebP 响应式图片、非首屏延迟加载和前后台代码分包
+- 视频封面直连 B 站 CDN，由 `@` 后缀按需生成尺寸与格式，服务端不代理图片
 - Argon2id 管理密码、HttpOnly 会话、CSRF 防护、上传类型限制和 100 MB 文件大小限制
 
 ## 技术栈
@@ -158,7 +159,7 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 
 ## Bilibili 同步
 
-主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。视频封面通过同源 `/api/bilibili/image` 代理，按需获取 `960 x 540` WebP 缩略图，并使用受限的服务端内存缓存和浏览器长期缓存，避免 Bilibili 图片防盗链及原图过大导致加载缓慢。浏览器不会直接请求 Bilibili。
+主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。视频封面不经过服务端：接口下发 B 站 CDN 原始地址，前端按需追加 `@672w_378h_1c.webp` 这类后缀，由 CDN 实时裁剪、缩放和转码，并提供 `480/672/960/1280` 四档 AVIF 与 WebP 响应式候选。这样既省掉服务端带宽和内存缓存，也不存在图片代理带来的 SSRF 入口。所有封面 `<img>` 都带 `referrerpolicy="no-referrer"`，用于通过 B 站图床的 Referer 防盗链；加载失败时隐藏裂图，保留封面底色与播放角标。
 
 Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况，可以在 `.env` 的 `BILIBILI_COOKIE` 中配置有效的服务端 Cookie 后重启服务。该变量不能添加 `VITE_` 前缀，也不要提交到 Git。
 
@@ -189,6 +190,8 @@ Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况
 ```
 
 同步成功后，首页视频、视频档案和“此刻动态”都会使用真实内容。视频与动态分别通过 `videoUnavailable`、`dynamicUnavailable`、`videoStale` 和 `dynamicStale` 标记同步状态，单项失败不会影响另一项。页面不会使用本地示例视频或动态。
+
+`cover` 字段是规整过协议和域名的 B 站 CDN 原始地址（仅接受 `https` 且主机名以 `.hdslb.com`、`.biliimg.com` 结尾），不带 `@` 尺寸后缀；尺寸由前端根据显示位置追加。启用 CSP 时需要为 `img-src` 放行 `https://*.hdslb.com` 和 `https://*.biliimg.com`。
 
 ## 图片优化
 

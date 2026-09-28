@@ -84,6 +84,11 @@ function imageSrcset(source) {
   return `${source.replace('-1600.webp', '-640.webp')} 640w, ${source} 1600w`
 }
 
+// B 站 CDN 偶发失败时，隐藏裂图，保留 .video-cover 的底色与播放角标。
+function hideBrokenCover(event) {
+  event.target.style.display = 'none'
+}
+
 async function loadPublishedContent() {
   try {
     const response = await fetch('/api/content')
@@ -193,7 +198,7 @@ onMounted(async () => {
           </div>
           <div v-if="videos.length" class="video-grid">
             <a v-for="video in videos.slice(0, 3)" :key="video.id" class="video-card" :href="`https://www.bilibili.com/video/${video.id}`" target="_blank" rel="noreferrer">
-              <div class="video-cover"><img :src="video.cover" :srcset="imageSrcset(video.cover)" referrerpolicy="no-referrer" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" width="1600" height="900" loading="lazy" decoding="async" :alt="video.title" /><span class="duration">{{ video.duration }}</span><span class="play-overlay"><CirclePlay :size="42" /></span></div>
+              <div class="video-cover"><picture><source :srcset="video.coverSources.avif" type="image/avif" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" /><img :src="video.coverSources.src" :srcset="video.coverSources.webp" sizes="(max-width: 820px) calc(100vw - 32px), 33vw" width="960" height="540" referrerpolicy="no-referrer" loading="lazy" decoding="async" :alt="video.title" @error="hideBrokenCover" /></picture><span class="duration">{{ video.duration }}</span><span class="play-overlay"><CirclePlay :size="42" /></span></div>
               <div class="video-info"><small>{{ video.id }} · {{ video.date }}</small><h3>{{ video.title }}</h3><p>{{ video.stats }}</p></div>
             </a>
           </div>
@@ -258,7 +263,7 @@ onMounted(async () => {
       <section class="page-head section-wrap"><span class="eyebrow">VIDEO ARCHIVE / UID 1858510441</span><h1>作品时间线</h1><p>B 站投稿自动同步。星尘、诗岸、洛天依，与写给现实世界的科幻摇滚。</p></section>
       <section class="section-wrap video-archive">
         <a v-for="(video, i) in videos" :key="video.id" :href="`https://www.bilibili.com/video/${video.id}`" target="_blank" rel="noreferrer">
-          <span class="video-no">0{{ i + 1 }}</span><div class="video-cover"><img :src="video.cover" :srcset="imageSrcset(video.cover)" referrerpolicy="no-referrer" sizes="(max-width: 560px) calc(100vw - 72px), 270px" width="1600" height="900" loading="lazy" decoding="async" :alt="video.title"/><span class="play-overlay"><CirclePlay :size="46"/></span></div><div><small>{{ video.id }} / {{ video.date }}</small><h2>{{ video.title }}</h2><p>{{ video.stats }}</p></div><ExternalLink class="external"/>
+          <span class="video-no">0{{ i + 1 }}</span><div class="video-cover"><picture><source :srcset="video.coverSources.avif" type="image/avif" sizes="(max-width: 560px) calc(100vw - 72px), 270px" /><img :src="video.coverSources.src" :srcset="video.coverSources.webp" sizes="(max-width: 560px) calc(100vw - 72px), 270px" width="960" height="540" referrerpolicy="no-referrer" loading="lazy" decoding="async" :alt="video.title" @error="hideBrokenCover" /></picture><span class="play-overlay"><CirclePlay :size="46"/></span></div><div><small>{{ video.id }} / {{ video.date }}</small><h2>{{ video.title }}</h2><p>{{ video.stats }}</p></div><ExternalLink class="external"/>
         </a>
         <p v-if="!videos.length" class="video-empty archive-empty">{{ videoSyncState }}</p>
       </section>

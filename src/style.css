@@ -85,6 +85,7 @@ a { color: inherit; text-decoration: none; }
 .video-card { background: #181a1a; border-bottom: 2px solid #313433; }
 .video-card:hover { border-color: var(--acid); }
 .video-cover { position: relative; aspect-ratio: 16/9; overflow: hidden; background: #222; }
+.video-cover picture { display: block; width: 100%; height: 100%; }
 .video-cover img { width: 100%; height: 100%; object-fit: cover; opacity: .78; transition: opacity .2s, transform .3s; }
 .video-card:hover img { opacity: 1; transform: scale(1.025); }
 .duration { position: absolute; right: 8px; bottom: 8px; padding: 3px 6px; background: rgba(0,0,0,.8); font: 600 10px var(--font-label); }

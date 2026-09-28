@@ -1,12 +1,11 @@
+import { coverImage } from '../utils/imageUrl.js'
+
 const syncUrl = import.meta.env.VITE_BILIBILI_SYNC_URL || '/api/bilibili/feed'
 
 function normalizeVideo(video) {
+  // 封面直连 B 站 CDN，由 `@` 后缀在 CDN 侧生成合适尺寸，服务端不再代理图片。
   const cover = String(video?.cover || '')
-  const isBilibiliImage = /^https:\/\/[^/]+\.(?:hdslb|biliimg)\.com\//i.test(cover)
-  return {
-    ...video,
-    cover: isBilibiliImage ? `/api/bilibili/image?url=${encodeURIComponent(cover)}` : cover,
-  }
+  return { ...video, cover, coverSources: coverImage(cover) }
 }
 
 export async function fetchBilibiliFeed() {
