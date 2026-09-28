@@ -16,6 +16,7 @@ import {
   uploadContentType,
   validateUploadMetadata,
 } from './security/upload.js'
+import { UpstreamSecurityError, fetchUpstreamBuffer, validateUpstreamUrl } from './security/upstream.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -40,10 +41,12 @@ const sessionCookieName = isProduction ? '__Host-utopia_admin_session' : 'utopia
 const adminSessions = new Map()
 const loginFailures = new Map()
 const activeAdminWrites = new Map()
+const activePublicRequests = new Map()
 const loginFailureLimit = 10000
 let activeLoginAttempts = 0
 let activeUploads = 0
 let contentMutationQueue = Promise.resolve()
+let bilibiliFeedPending = null
 const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || (isProduction ? 1 : 0))
 const loginWindowMs = positiveNumber('ADMIN_LOGIN_WINDOW_MINUTES', 15) * 60 * 1000
 const loginIpLimit = positiveInteger('ADMIN_LOGIN_IP_LIMIT', 10)
@@ -68,14 +71,43 @@ const archiveLimits = {
 const virusScanCommand = String(process.env.UPLOAD_VIRUS_SCAN_COMMAND || '').trim()
 const virusScanArgs = stringArrayFromEnv('UPLOAD_VIRUS_SCAN_ARGS', ['--no-summary'])
 const virusScanTimeoutMs = positiveNumber('UPLOAD_SCAN_TIMEOUT_SECONDS', 60) * 1000
+const publicRateWindowMs = positiveNumber('PUBLIC_RATE_WINDOW_MINUTES', 10) * 60 * 1000
+const bilibiliFeedRateLimit = positiveInteger('BILIBILI_FEED_RATE_LIMIT', 60)
+const bilibiliImageRateLimit = positiveInteger('BILIBILI_IMAGE_RATE_LIMIT', 180)
+const resourceDownloadRateLimit = positiveInteger('RESOURCE_DOWNLOAD_RATE_LIMIT', 60)
+const bilibiliFeedConcurrency = positiveInteger('BILIBILI_FEED_CONCURRENCY', 4)
+const bilibiliImageConcurrency = positiveInteger('BILIBILI_IMAGE_CONCURRENCY', 8)
+const resourceDownloadConcurrency = positiveInteger('RESOURCE_DOWNLOAD_CONCURRENCY', 4)
+const bilibiliUpstreamTimeoutMs = positiveNumber('BILIBILI_UPSTREAM_TIMEOUT_SECONDS', 8) * 1000
+const bilibiliJsonMaxBytes = Math.floor(positiveNumber('BILIBILI_JSON_MAX_MB', 2) * 1024 * 1024)
+const bilibiliImageMaxBytes = Math.floor(positiveNumber('BILIBILI_IMAGE_MAX_MB', 5) * 1024 * 1024)
+const bilibiliRedirectLimit = positiveInteger('BILIBILI_REDIRECT_LIMIT', 3)
+const bilibiliImageCacheLimit = Math.floor(positiveNumber('BILIBILI_IMAGE_CACHE_MB', 32) * 1024 * 1024)
+const bilibiliImageCacheEntries = positiveInteger('BILIBILI_IMAGE_CACHE_ENTRIES', 64)
+const resourceDownloadMaxBytes = Math.floor(positiveNumber('RESOURCE_DOWNLOAD_MAX_MB', 100) * 1024 * 1024)
+const resourceDownloadTimeoutMs = positiveNumber('RESOURCE_DOWNLOAD_TIMEOUT_SECONDS', 120) * 1000
 const serverHeadersTimeoutMs = positiveNumber('SERVER_HEADERS_TIMEOUT_SECONDS', 15) * 1000
 const serverRequestTimeoutMs = positiveNumber('SERVER_REQUEST_TIMEOUT_SECONDS', 120) * 1000
 const bilibiliUid = process.env.BILIBILI_UID || '1858510441'
 const bilibiliCookie = process.env.BILIBILI_COOKIE || ''
 const bilibiliCache = { expiresAt: 0, payload: null }
 const bilibiliImageCache = new Map()
-const bilibiliImageCacheLimit = 32 * 1024 * 1024
+const bilibiliImagePending = new Map()
 let bilibiliImageCacheSize = 0
+const bilibiliMetrics = {
+  feedHits: 0,
+  feedMisses: 0,
+  feedCoalesced: 0,
+  imageHits: 0,
+  imageMisses: 0,
+  imageCoalesced: 0,
+  imageEvictions: 0,
+}
+const bilibiliApiHosts = new Set(['api.bilibili.com'])
+const bilibiliImageHosts = new Set([
+  'i0.hdslb.com', 'i1.hdslb.com', 'i2.hdslb.com',
+  'archive.biliimg.com', 'article.biliimg.com', 'dynamic-pic.biliimg.com',
+])
 const wbiKeyCache = { expiresAt: 0, key: '' }
 const wbiMixinTable = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
@@ -443,6 +475,26 @@ function limitUploadConcurrency(request, response, next) {
   next()
 }
 
+function publicConcurrencyLimiter(bucket, limit, event) {
+  return (request, response, next) => {
+    const active = activePublicRequests.get(bucket) || 0
+    if (active >= limit) return sendRateLimited(request, response, event, 1)
+
+    activePublicRequests.set(bucket, active + 1)
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      const remaining = (activePublicRequests.get(bucket) || 1) - 1
+      if (remaining > 0) activePublicRequests.set(bucket, remaining)
+      else activePublicRequests.delete(bucket)
+    }
+    response.once('finish', release)
+    response.once('close', release)
+    next()
+  }
+}
+
 const loginIpLimiter = rateLimit({
   windowMs: loginWindowMs,
   limit: loginIpLimit,
@@ -480,6 +532,24 @@ const uploadRateLimiter = rateLimit({
   handler: (request, response) => sendRateLimited(request, response, 'admin_upload_rate_limit', uploadWindowMs / 1000),
 })
 
+function publicRateLimiter(limit, event) {
+  return rateLimit({
+    windowMs: publicRateWindowMs,
+    limit,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (request, response) => sendRateLimited(request, response, event, publicRateWindowMs / 1000),
+  })
+}
+
+const bilibiliFeedLimiter = publicRateLimiter(bilibiliFeedRateLimit, 'bilibili_feed_rate_limit')
+const bilibiliImageLimiter = publicRateLimiter(bilibiliImageRateLimit, 'bilibili_image_rate_limit')
+const bilibiliCacheStatsLimiter = publicRateLimiter(30, 'bilibili_cache_stats_rate_limit')
+const resourceDownloadLimiter = publicRateLimiter(resourceDownloadRateLimit, 'resource_download_rate_limit')
+const limitBilibiliFeedConcurrency = publicConcurrencyLimiter('bilibili-feed', bilibiliFeedConcurrency, 'bilibili_feed_concurrency')
+const limitBilibiliImageConcurrency = publicConcurrencyLimiter('bilibili-image', bilibiliImageConcurrency, 'bilibili_image_concurrency')
+const limitResourceDownloadConcurrency = publicConcurrencyLimiter('resource-download', resourceDownloadConcurrency, 'resource_download_concurrency')
+
 function normalizeArticle(input, existing = {}) {
   const now = new Date().toISOString()
   return {
@@ -514,11 +584,7 @@ function bilibiliHeaders() {
 }
 
 function parseBilibiliImageUrl(value) {
-  const url = new URL(String(value || ''))
-  const hostname = url.hostname.toLowerCase()
-  const allowed = hostname.endsWith('.hdslb.com') || hostname.endsWith('.biliimg.com')
-  if (url.protocol !== 'https:' || !allowed) throw new Error('Invalid Bilibili image URL')
-  return url
+  return validateUpstreamUrl(value, bilibiliImageHosts)
 }
 
 function optimizedBilibiliImageUrl(value) {
@@ -544,11 +610,12 @@ function getCachedBilibiliImage(key) {
 
 function cacheBilibiliImage(key, entry) {
   if (entry.body.length > bilibiliImageCacheLimit) return
-  while (bilibiliImageCache.size >= 64 || bilibiliImageCacheSize + entry.body.length > bilibiliImageCacheLimit) {
+  while (bilibiliImageCache.size >= bilibiliImageCacheEntries || bilibiliImageCacheSize + entry.body.length > bilibiliImageCacheLimit) {
     const oldestKey = bilibiliImageCache.keys().next().value
     const oldest = bilibiliImageCache.get(oldestKey)
     bilibiliImageCache.delete(oldestKey)
     bilibiliImageCacheSize -= oldest.body.length
+    bilibiliMetrics.imageEvictions += 1
   }
   bilibiliImageCache.set(key, entry)
   bilibiliImageCacheSize += entry.body.length
@@ -559,6 +626,7 @@ function sendBilibiliImage(response, image, cacheStatus) {
     'Cache-Control': 'public, max-age=604800, immutable, stale-while-revalidate=2592000',
     'Content-Type': image.contentType,
     'Content-Length': image.body.length,
+    'X-Content-Type-Options': 'nosniff',
     'X-Image-Cache': cacheStatus,
   })
   response.send(image.body)
@@ -571,17 +639,25 @@ function proxiedBilibiliImageUrl(value) {
 }
 
 async function fetchBilibiliJson(url) {
-  const response = await fetch(url, {
+  const response = await fetchUpstreamBuffer(url, {
+    allowedHosts: bilibiliApiHosts,
     headers: bilibiliHeaders(),
-    signal: AbortSignal.timeout(8000),
+    maxBytes: bilibiliJsonMaxBytes,
+    maxRedirects: bilibiliRedirectLimit,
+    timeoutMs: bilibiliUpstreamTimeoutMs,
   })
-  const contentType = response.headers.get('content-type') || ''
-  if (!response.ok || !contentType.includes('application/json')) {
-    throw new Error(`Bilibili request failed (${response.status})`)
+  const contentType = String(response.headers['content-type'] || '')
+  if (response.status < 200 || response.status >= 300 || !contentType.includes('application/json')) {
+    throw new UpstreamSecurityError('bilibili_json_invalid')
   }
 
-  const data = await response.json()
-  if (data.code !== 0) throw new Error(`Bilibili API error (${data.code ?? 'invalid response'})`)
+  let data
+  try {
+    data = JSON.parse(response.body.toString('utf8'))
+  } catch {
+    throw new UpstreamSecurityError('bilibili_json_invalid')
+  }
+  if (data.code !== 0) throw new UpstreamSecurityError('bilibili_api_rejected')
   return data
 }
 
@@ -603,17 +679,9 @@ function wbiKeyFromUrl(url) {
 
 async function getWbiMixinKey() {
   if (wbiKeyCache.key && wbiKeyCache.expiresAt > Date.now()) return wbiKeyCache.key
-  const response = await fetch('https://api.bilibili.com/x/web-interface/nav', {
-    headers: bilibiliHeaders(),
-    signal: AbortSignal.timeout(8000),
-  })
-  const contentType = response.headers.get('content-type') || ''
-  if (!response.ok || !contentType.includes('application/json')) {
-    throw new Error(`Bilibili WBI key request failed (${response.status})`)
-  }
-  const data = await response.json()
+  const data = await fetchBilibiliJson('https://api.bilibili.com/x/web-interface/nav')
   if (!data.data?.wbi_img?.img_url || !data.data?.wbi_img?.sub_url) {
-    throw new Error(`Bilibili WBI key error (${data.code ?? 'invalid response'})`)
+    throw new UpstreamSecurityError('bilibili_wbi_key_invalid')
   }
   const rawKey = `${wbiKeyFromUrl(data.data.wbi_img.img_url)}${wbiKeyFromUrl(data.data.wbi_img.sub_url)}`
   const key = wbiMixinTable.map((index) => rawKey[index]).join('').slice(0, 32)
@@ -693,75 +761,126 @@ async function fetchBilibiliVideos() {
   })).filter((video) => video.id && video.title && video.cover)
 }
 
+function upstreamErrorCode(error) {
+  return typeof error?.code === 'string' ? error.code : 'unexpected_upstream_error'
+}
+
+function logUpstreamFailure(event, error) {
+  console.error(JSON.stringify({
+    level: 'upstream',
+    time: new Date().toISOString(),
+    event,
+    outcome: 'failed',
+    reason: upstreamErrorCode(error),
+  }))
+}
+
+async function fetchBilibiliImage(imageUrl) {
+  const upstream = await fetchUpstreamBuffer(imageUrl, {
+    allowedHosts: bilibiliImageHosts,
+    headers: {
+      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      Referer: 'https://www.bilibili.com/',
+      'User-Agent': bilibiliHeaders()['User-Agent'],
+    },
+    maxBytes: bilibiliImageMaxBytes,
+    maxRedirects: bilibiliRedirectLimit,
+    timeoutMs: bilibiliUpstreamTimeoutMs,
+  })
+  const contentType = String(upstream.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase()
+  const allowedContentTypes = new Set(['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp'])
+  if (upstream.status < 200 || upstream.status >= 300 || !allowedContentTypes.has(contentType)) {
+    throw new UpstreamSecurityError('bilibili_image_invalid')
+  }
+  return { body: upstream.body, contentType, expiresAt: Date.now() + 6 * 60 * 60 * 1000 }
+}
+
+async function refreshBilibiliFeed() {
+  const [videoResult, dynamicResult] = await Promise.allSettled([
+    fetchBilibiliVideos(),
+    fetchBilibiliDynamics(),
+  ])
+  const videoUnavailable = videoResult.status === 'rejected'
+  const dynamicUnavailable = dynamicResult.status === 'rejected'
+  if (videoUnavailable) logUpstreamFailure('bilibili_video_sync', videoResult.reason)
+  if (dynamicUnavailable) logUpstreamFailure('bilibili_dynamic_sync', dynamicResult.reason)
+  const videoStale = videoUnavailable && Boolean(bilibiliCache.payload?.videos?.length)
+  const dynamicStale = dynamicUnavailable && Boolean(bilibiliCache.payload?.dynamics?.length)
+
+  const payload = {
+    syncedAt: new Date().toISOString(),
+    videos: videoStale ? bilibiliCache.payload.videos : videoUnavailable ? [] : videoResult.value,
+    dynamics: dynamicStale ? bilibiliCache.payload.dynamics : dynamicUnavailable ? [] : dynamicResult.value,
+    videoUnavailable,
+    dynamicUnavailable,
+    videoStale,
+    dynamicStale,
+    unavailable: videoUnavailable && dynamicUnavailable && !videoStale && !dynamicStale,
+  }
+  bilibiliCache.payload = payload
+  bilibiliCache.expiresAt = Date.now() + 10 * 60 * 1000
+  return payload
+}
+
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true })
 })
 
-app.get('/api/bilibili/image', async (request, response) => {
+app.get('/api/bilibili/image', bilibiliImageLimiter, limitBilibiliImageConcurrency, async (request, response) => {
   try {
     const imageUrl = optimizedBilibiliImageUrl(request.query.url)
     const cached = getCachedBilibiliImage(imageUrl.href)
-    if (cached) return sendBilibiliImage(response, cached, 'HIT')
-
-    const upstream = await fetch(imageUrl, {
-      headers: {
-        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        Referer: 'https://www.bilibili.com/',
-        'User-Agent': bilibiliHeaders()['User-Agent'],
-      },
-      signal: AbortSignal.timeout(8000),
-    })
-    const contentType = upstream.headers.get('content-type') || ''
-    if (!upstream.ok || !contentType.startsWith('image/')) {
-      throw new Error(`Bilibili image request failed (${upstream.status})`)
+    if (cached) {
+      bilibiliMetrics.imageHits += 1
+      return sendBilibiliImage(response, cached, 'HIT')
     }
 
-    const contentLength = Number(upstream.headers.get('content-length') || 0)
-    if (contentLength > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
-    const body = Buffer.from(await upstream.arrayBuffer())
-    if (body.length > 10 * 1024 * 1024) throw new Error('Bilibili image is too large')
-    const image = { body, contentType, expiresAt: Date.now() + 6 * 60 * 60 * 1000 }
-    cacheBilibiliImage(imageUrl.href, image)
-    sendBilibiliImage(response, image, 'MISS')
+    let pending = bilibiliImagePending.get(imageUrl.href)
+    let cacheStatus = 'COALESCED'
+    if (pending) {
+      bilibiliMetrics.imageCoalesced += 1
+    } else {
+      bilibiliMetrics.imageMisses += 1
+      cacheStatus = 'MISS'
+      pending = fetchBilibiliImage(imageUrl).then((image) => {
+        cacheBilibiliImage(imageUrl.href, image)
+        return image
+      })
+      bilibiliImagePending.set(imageUrl.href, pending)
+    }
+    try {
+      sendBilibiliImage(response, await pending, cacheStatus)
+    } finally {
+      if (bilibiliImagePending.get(imageUrl.href) === pending) bilibiliImagePending.delete(imageUrl.href)
+    }
   } catch (error) {
-    console.error('Bilibili image proxy failed:', error.message)
-    response.status(502).json({ error: 'Bilibili image unavailable' })
+    securityLog('bilibili_image_proxy', request, 'failed', { reason: upstreamErrorCode(error) })
+    const invalidRequest = ['invalid_upstream_url', 'upstream_address_blocked'].includes(error?.code)
+    response.status(invalidRequest ? 400 : 502).json({ error: invalidRequest ? '图片地址无效' : 'Bilibili 图片暂不可用' })
   }
 })
 
-app.get('/api/bilibili/feed', async (_request, response) => {
+app.get('/api/bilibili/feed', bilibiliFeedLimiter, limitBilibiliFeedConcurrency, async (request, response) => {
   const now = Date.now()
   if (bilibiliCache.payload && bilibiliCache.expiresAt > now) {
+    bilibiliMetrics.feedHits += 1
+    response.set('X-Feed-Cache', 'HIT')
     return response.json(bilibiliCache.payload)
   }
 
   try {
-    const [videoResult, dynamicResult] = await Promise.allSettled([
-      fetchBilibiliVideos(),
-      fetchBilibiliDynamics(),
-    ])
-    const videoUnavailable = videoResult.status === 'rejected'
-    const dynamicUnavailable = dynamicResult.status === 'rejected'
-    if (videoUnavailable) console.error('Bilibili video sync failed:', videoResult.reason.message)
-    if (dynamicUnavailable) console.error('Bilibili dynamic sync failed:', dynamicResult.reason.message)
-    const videoStale = videoUnavailable && Boolean(bilibiliCache.payload?.videos?.length)
-    const dynamicStale = dynamicUnavailable && Boolean(bilibiliCache.payload?.dynamics?.length)
-
-    const payload = {
-      syncedAt: new Date().toISOString(),
-      videos: videoStale ? bilibiliCache.payload.videos : videoUnavailable ? [] : videoResult.value,
-      dynamics: dynamicStale ? bilibiliCache.payload.dynamics : dynamicUnavailable ? [] : dynamicResult.value,
-      videoUnavailable,
-      dynamicUnavailable,
-      videoStale,
-      dynamicStale,
-      unavailable: videoUnavailable && dynamicUnavailable && !videoStale && !dynamicStale,
+    let cacheStatus = 'COALESCED'
+    if (bilibiliFeedPending) {
+      bilibiliMetrics.feedCoalesced += 1
+    } else {
+      bilibiliMetrics.feedMisses += 1
+      cacheStatus = 'MISS'
+      bilibiliFeedPending = refreshBilibiliFeed()
     }
-    bilibiliCache.payload = payload
-    bilibiliCache.expiresAt = now + 10 * 60 * 1000
-    response.json(payload)
+    response.set('X-Feed-Cache', cacheStatus)
+    response.json(await bilibiliFeedPending)
   } catch (error) {
-    console.error('Bilibili sync failed:', error.message)
+    securityLog('bilibili_feed', request, 'failed', { reason: upstreamErrorCode(error) })
     if (bilibiliCache.payload) return response.json({ ...bilibiliCache.payload, stale: true })
     response.json({
       syncedAt: null,
@@ -771,19 +890,53 @@ app.get('/api/bilibili/feed', async (_request, response) => {
       dynamicUnavailable: true,
       unavailable: true,
     })
+  } finally {
+    bilibiliFeedPending = null
   }
 })
 
-app.get('/api/resources/:id/download', async (request, response, next) => {
+app.get('/api/bilibili/cache-stats', bilibiliCacheStatsLimiter, (request, response) => {
+  securityLog('bilibili_cache_stats', request, 'succeeded')
+  response.json({
+    feed: {
+      hits: bilibiliMetrics.feedHits,
+      misses: bilibiliMetrics.feedMisses,
+      coalesced: bilibiliMetrics.feedCoalesced,
+      cached: Boolean(bilibiliCache.payload && bilibiliCache.expiresAt > Date.now()),
+    },
+    images: {
+      hits: bilibiliMetrics.imageHits,
+      misses: bilibiliMetrics.imageMisses,
+      coalesced: bilibiliMetrics.imageCoalesced,
+      evictions: bilibiliMetrics.imageEvictions,
+      entries: bilibiliImageCache.size,
+      bytes: bilibiliImageCacheSize,
+      maxBytes: bilibiliImageCacheLimit,
+      maxEntries: bilibiliImageCacheEntries,
+    },
+  })
+})
+
+app.get('/api/resources/:id/download', resourceDownloadLimiter, limitResourceDownloadConcurrency, async (request, response, next) => {
   try {
     const content = await readContent()
     const resource = content.resources.find((item) => item.id === request.params.id)
     const filePath = resource && resourceStoragePath(resource)
     if (!resource || !filePath) return response.status(404).json({ error: '资源不存在' })
-    await stat(filePath)
+    const fileStats = await stat(filePath)
+    if (fileStats.size > resourceDownloadMaxBytes) {
+      return response.status(413).json({ error: '资源文件超过下载限制' })
+    }
 
     const downloadName = basename(decodeUploadFilename(resource.downloadName) || 'download')
     const extension = extname(downloadName).toLowerCase()
+    const downloadTimer = setTimeout(() => {
+      if (!response.writableEnded) response.destroy()
+    }, resourceDownloadTimeoutMs)
+    downloadTimer.unref()
+    const clearDownloadTimer = () => clearTimeout(downloadTimer)
+    response.once('finish', clearDownloadTimer)
+    response.once('close', clearDownloadTimer)
     response.download(filePath, downloadName, {
       headers: {
         'Content-Type': resource.mime || uploadContentType(extension),

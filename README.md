@@ -109,6 +109,21 @@ PORT=8787
 | `VITE_BILIBILI_SPACE_URL` | 主站跳转到 Bilibili 个人空间的地址 |
 | `BILIBILI_UID` | 服务端同步的 Bilibili 用户 UID，默认 `1858510441` |
 | `BILIBILI_COOKIE` | 可选的服务端 Cookie，用于降低公开接口触发风控的概率 |
+| `BILIBILI_UPSTREAM_TIMEOUT_SECONDS` | Bilibili 单次上游请求超时，默认 8 秒 |
+| `BILIBILI_JSON_MAX_MB` | Bilibili JSON 上游响应上限，默认 2 MB |
+| `BILIBILI_IMAGE_MAX_MB` | 单张代理图片响应上限，默认 5 MB |
+| `BILIBILI_REDIRECT_LIMIT` | Bilibili 上游最大重定向次数，默认 3 次 |
+| `BILIBILI_IMAGE_CACHE_MB` | 图片内存缓存总容量，默认 32 MB |
+| `BILIBILI_IMAGE_CACHE_ENTRIES` | 图片内存缓存条目上限，默认 64 条 |
+| `PUBLIC_RATE_WINDOW_MINUTES` | 公开接口限流窗口，默认 10 分钟 |
+| `BILIBILI_FEED_RATE_LIMIT` | 单 IP 在窗口内允许的同步请求数，默认 60 次 |
+| `BILIBILI_IMAGE_RATE_LIMIT` | 单 IP 在窗口内允许的图片代理请求数，默认 180 次 |
+| `BILIBILI_FEED_CONCURRENCY` | 同步接口全局并发请求上限，默认 4 个 |
+| `BILIBILI_IMAGE_CONCURRENCY` | 图片代理全局并发请求上限，默认 8 个 |
+| `RESOURCE_DOWNLOAD_RATE_LIMIT` | 单 IP 在窗口内允许的资源下载请求数，默认 60 次 |
+| `RESOURCE_DOWNLOAD_CONCURRENCY` | 资源下载全局并发请求上限，默认 4 个 |
+| `RESOURCE_DOWNLOAD_MAX_MB` | 允许下载的单个资源大小上限，默认 100 MB |
+| `RESOURCE_DOWNLOAD_TIMEOUT_SECONDS` | 单次资源下载最长时间，默认 120 秒 |
 
 `VITE_` 开头的变量会在构建时进入前端代码，不能在其中保存 Cookie、Access Key 或签名密钥。
 
@@ -159,6 +174,10 @@ Markdown 渲染结果会经过 DOMPurify 清理。API 不可用或没有已发�
 ## Bilibili 同步
 
 主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。视频封面通过同源 `/api/bilibili/image` 代理，按需获取 `960 x 540` WebP 缩略图，并使用受限的服务端内存缓存和浏览器长期缓存，避免 Bilibili 图片防盗链及原图过大导致加载缓慢。浏览器不会直接请求 Bilibili。
+
+图片代理仅允许固定的 Bilibili 图片主机和 HTTPS 默认端口。服务端在每次重定向前重新验证 URL 与 DNS 解析结果，并将通过检查的公网地址固定到实际 TLS 请求，阻止私网、环回、链路本地、开放重定向及 DNS 重绑定。同步、图片和下载接口分别限制请求频率、全局并发、响应大小与超时；相同图片和同步请求会复用正在进行的上游请求。
+
+`/api/bilibili/cache-stats` 提供不含敏感信息的缓存指标，包括命中、未命中、合并请求、淘汰次数、当前条目和内存占用。图片响应的 `X-Image-Cache` 与同步响应的 `X-Feed-Cache` 会返回 `HIT`、`MISS` 或 `COALESCED`。
 
 Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况，可以在 `.env` 的 `BILIBILI_COOKIE` 中配置有效的服务端 Cookie 后重启服务。该变量不能添加 `VITE_` 前缀，也不要提交到 Git。
 
@@ -228,7 +247,11 @@ npm start
 ```nginx
 limit_req_zone $binary_remote_addr zone=admin_login:10m rate=5r/m;
 limit_req_zone $binary_remote_addr zone=admin_api:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=bilibili_feed:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=bilibili_image:10m rate=60r/m;
+limit_req_zone $binary_remote_addr zone=resource_download:10m rate=20r/m;
 limit_conn_zone $binary_remote_addr zone=admin_conn:10m;
+limit_conn_zone $binary_remote_addr zone=public_conn:10m;
 ```
 
 `server` 块中的路由示例：
@@ -257,6 +280,42 @@ location /api/admin/ {
     limit_req zone=admin_api burst=20 nodelay;
     limit_conn admin_conn 5;
 
+    proxy_pass http://127.0.0.1:8787;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 120s;
+    proxy_read_timeout 120s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /api/bilibili/feed {
+    limit_req zone=bilibili_feed burst=10 nodelay;
+    limit_conn public_conn 4;
+    proxy_pass http://127.0.0.1:8787;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 15s;
+    proxy_read_timeout 15s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /api/bilibili/image {
+    limit_req zone=bilibili_image burst=30 nodelay;
+    limit_conn public_conn 8;
+    proxy_pass http://127.0.0.1:8787;
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 15s;
+    proxy_read_timeout 15s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location ~ ^/api/resources/[^/]+/download$ {
+    limit_req zone=resource_download burst=10 nodelay;
+    limit_conn public_conn 4;
     proxy_pass http://127.0.0.1:8787;
     proxy_connect_timeout 5s;
     proxy_send_timeout 120s;
@@ -300,6 +359,7 @@ npm run build          # 生产构建
 npm run audit:ui       # 桌面、平板和手机界面审计
 npm run test:auth      # 后台认证与限流集成测试
 npm run test:uploads   # 上传、扫描、下载与删除安全集成测试
+npm run test:public    # SSRF、重定向、响应上限和超时安全测试
 npm run security:secrets
 npm run optimize:images
 ```
