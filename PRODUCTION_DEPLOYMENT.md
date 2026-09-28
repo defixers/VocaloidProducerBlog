@@ -1,0 +1,391 @@
+# 生产部署与安全验收
+
+本文档适用于 `utopiap.top` 和 `www.utopiap.top` 的生产部署。目标是让每次发布都来自唯一、干净且经过 CI 验证的 Git 提交，并确保运行时数据、HTTPS 边界和回滚路径不依赖 Git 工作区中的临时状态。
+
+## 1. 部署原则
+
+- 生产流量只通过 Nginx 的 `80` 和 `443` 端口进入。
+- Express 使用 `8787`，云安全组和主机防火墙不得向公网开放该端口。
+- Nginx 是唯一可信反向代理时，`.env` 使用 `TRUST_PROXY_HOPS=1`。
+- `APP_STORAGE_ROOT` 必须指向 Git 工作区之外的持久化目录。
+- 不从包含未提交修改的工作区构建，也不把生产数据写回仓库目录。
+- 发布前验证源码、依赖、测试与产物来源；发布后验证线上提交 SHA 和安全控制。
+- `.env`、Bilibili Cookie、密码哈希、数据文件和上传文件不得进入 Git 或 CI 构建产物。
+
+## 2. 目录与权限
+
+推荐目录：
+
+```text
+/home/admin/VocaloidProducerBlog/       应用 Git 工作区
+/var/lib/vocaloid-producer-blog/        持久化数据根目录
+  data/content.json
+  uploads/
+/etc/nginx/sites-available/utopiap.top   Nginx 站点配置
+/etc/nginx/snippets/utopia-security.conf
+```
+
+创建持久化目录，并确保只有运行应用的账户可以写入：
+
+```bash
+sudo install -d -o admin -g admin -m 0750 /var/lib/vocaloid-producer-blog
+sudo install -d -o admin -g admin -m 0750 /var/lib/vocaloid-producer-blog/data
+sudo install -d -o admin -g admin -m 0750 /var/lib/vocaloid-producer-blog/uploads
+```
+
+首次迁移现有数据前必须先停止写入并备份 `server/data/`、`server/uploads/` 和 `.env`。确认目标目录中的文件数量、大小和权限后，再将 `.env` 设置为：
+
+```dotenv
+APP_STORAGE_ROOT=/var/lib/vocaloid-producer-blog
+```
+
+不要在未确认备份可恢复的情况下删除旧数据目录。
+
+## 3. 生产环境变量
+
+生产 `.env` 至少确认以下内容：
+
+```dotenv
+NODE_ENV=production
+APP_ORIGIN=https://utopiap.top,https://www.utopiap.top
+TRUST_PROXY_HOPS=1
+PORT=8787
+APP_STORAGE_ROOT=/var/lib/vocaloid-producer-blog
+ADMIN_PASSWORD_HASH=有效的Argon2id哈希
+UPLOAD_VIRUS_SCAN_COMMAND=clamscan
+UPLOAD_VIRUS_SCAN_ARGS=["--no-summary"]
+```
+
+限制环境文件权限：
+
+```bash
+chmod 600 .env
+```
+
+`VITE_` 前缀的值会进入浏览器产物，禁止用于 Cookie、密码、令牌或签名密钥。
+
+## 4. 发布前检查
+
+从 `main` 的干净检出执行：
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git status --porcelain=v1
+git rev-parse HEAD
+```
+
+`git status --porcelain=v1` 必须没有输出。如果因为历史重写、分支分叉或本地修改导致 `--ff-only` 失败，应停止发布并使用新的发布目录重新克隆；不要在未备份生产数据时执行 `git reset --hard`。
+
+安装与验证：
+
+```bash
+npm ci
+npm run security:supply-chain
+npm audit --audit-level=high --registry=https://registry.npmjs.org
+npm run security:secrets
+npm run test:auth
+npm run test:uploads
+npm run test:public
+npm run test:content
+npm run verify:reproducible
+npm run verify:build
+```
+
+检查构建来源：
+
+```bash
+cat dist/build-info.json
+```
+
+要求：
+
+- `commit` 等于 `git rev-parse HEAD` 输出的完整 40 位 SHA。
+- `dirty` 为 `false`。
+- GitHub 上同一提交的 `Security and reproducible build / verify` 与 `CodeQL / analyze` 均成功。
+
+若使用 CI 下载的预构建产物，使用记录的提交 SHA 验证：
+
+```bash
+DEPLOY_COMMIT=完整的40位提交SHA npm run verify:build
+```
+
+## 5. systemd 服务
+
+先使用 `command -v node` 确认 Node.js 24.21.x 的实际路径。以下示例假设为 `/usr/bin/node`。
+
+创建 `/etc/systemd/system/vocaloid-producer-blog.service`：
+
+```ini
+[Unit]
+Description=Vocaloid Producer Blog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/VocaloidProducerBlog
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/vocaloid-producer-blog
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
+```
+
+加载并启动：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now vocaloid-producer-blog
+sudo systemctl status vocaloid-producer-blog
+sudo journalctl -u vocaloid-producer-blog -n 100 --no-pager
+```
+
+仅从服务器本机验证 Express：
+
+```bash
+curl -i http://127.0.0.1:8787/api/health
+```
+
+## 6. Nginx 安全响应头
+
+创建 `/etc/nginx/snippets/utopia-security.conf`：
+
+```nginx
+add_header Strict-Transport-Security "max-age=31536000" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests" always;
+```
+
+新 CSP 必须先用 `Content-Security-Policy-Report-Only` 验证首页、文章、Bilibili 封面、管理登录、Markdown 预览和上传下载。确认没有违规后才改为强制的 `Content-Security-Policy`。
+
+不要在未确认所有子域名长期支持 HTTPS 前增加 HSTS `includeSubDomains` 或 `preload`。
+
+## 7. Nginx 限流区域
+
+以下配置放在 Nginx `http` 块中，不能放入 `server` 或 `location`：
+
+```nginx
+limit_req_zone $binary_remote_addr zone=admin_login:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=admin_api:10m rate=30r/m;
+limit_req_zone $binary_remote_addr zone=bilibili_feed:10m rate=10r/m;
+limit_req_zone $binary_remote_addr zone=bilibili_image:10m rate=60r/m;
+limit_req_zone $binary_remote_addr zone=resource_download:10m rate=20r/m;
+limit_conn_zone $binary_remote_addr zone=admin_conn:10m;
+limit_conn_zone $binary_remote_addr zone=public_conn:10m;
+```
+
+## 8. Nginx 站点配置
+
+保留实际证书路径。Express 已提供静态产物和 SPA 回退，因此所有页面也应代理到 Express。
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name utopiap.top www.utopiap.top;
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name utopiap.top www.utopiap.top;
+
+    ssl_certificate /etc/letsencrypt/live/utopiap.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/utopiap.top/privkey.pem;
+
+    include /etc/nginx/snippets/utopia-security.conf;
+
+    client_header_timeout 15s;
+    client_body_timeout 30s;
+    send_timeout 120s;
+
+    location = /admin {
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/utopia-security.conf;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /admin/ {
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/utopia-security.conf;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /api/admin/auth/login {
+        client_max_body_size 16k;
+        limit_req zone=admin_login burst=3 nodelay;
+        limit_conn admin_conn 5;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
+    }
+
+    location /api/admin/ {
+        client_max_body_size 101m;
+        limit_req zone=admin_api burst=20 nodelay;
+        limit_conn admin_conn 5;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
+    location = /api/bilibili/feed {
+        limit_req zone=bilibili_feed burst=10 nodelay;
+        limit_conn public_conn 4;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
+    }
+
+    location = /api/bilibili/image {
+        limit_req zone=bilibili_image burst=30 nodelay;
+        limit_conn public_conn 8;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 15s;
+        proxy_read_timeout 15s;
+    }
+
+    location ~ ^/api/resources/[^/]+/download$ {
+        limit_req zone=resource_download burst=10 nodelay;
+        limit_conn public_conn 4;
+
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+    }
+
+    location /uploads/ {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        include /etc/nginx/proxy_params;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+Nginx 的 `add_header` 在子级 `location` 中出现后不会继承父级 `add_header`，因此管理页面设置 `Cache-Control` 时必须重新包含安全响应头片段。
+
+应用配置：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+## 9. 防火墙与反向代理边界
+
+在云安全组中只允许必要的管理端口以及公网 `80`、`443`。主机防火墙同样不得允许公网连接 `8787`。
+
+外部网络检查应连接失败：
+
+```bash
+curl --max-time 5 http://utopiap.top:8787/api/health
+```
+
+服务器本机访问 `127.0.0.1:8787` 应正常。若前方还有 CDN 或负载均衡器，必须重新计算 `TRUST_PROXY_HOPS`，不能继续机械使用 `1`。
+
+## 10. 发布后验收
+
+```bash
+curl -sSI http://utopiap.top/
+curl -sSI http://www.utopiap.top/
+curl -sS -D - -o /dev/null https://utopiap.top/
+curl -sS -D - -o /dev/null https://utopiap.top/admin
+curl -sS https://utopiap.top/api/health
+curl -sS https://utopiap.top/build-info.json
+curl -sS https://utopiap.top/api/bilibili/cache-stats
+curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
+```
+
+验收要求：
+
+- HTTP 永久跳转 HTTPS，两个域名证书有效。
+- HTTPS 返回 HSTS、强制 CSP、`nosniff`、`DENY`、Referrer Policy 和 Permissions Policy。
+- `/admin` 返回 `Cache-Control: no-store`，页面不能被 iframe 嵌入。
+- `/api/health` 返回 `{"ok":true}`。
+- `/build-info.json` 对应本次发布提交且 `dirty` 为 `false`。
+- `/api/bilibili/cache-stats` 返回 `200`，不包含 Cookie 或上游敏感信息。
+- 同步响应包含 `X-Feed-Cache`，图片响应包含 `X-Image-Cache`。
+- 首页、文章、视频封面、动态、管理登录、Markdown 预览、上传和下载功能正常。
+- 浏览器控制台没有 CSP 违规或脚本错误。
+
+## 11. 回滚
+
+回滚必须使用上一个已经通过 CI 且保留完整 `build-info.json` 的发布版本：
+
+1. 保持 `APP_STORAGE_ROOT` 不变，不回滚或覆盖运行时数据。
+2. 切换应用工作目录或服务指向上一个已验证版本。
+3. 执行 `DEPLOY_COMMIT=上一个提交SHA npm run verify:build`。
+4. 重启服务并重复全部发布后验收。
+5. 记录回滚提交、原因、时间和数据兼容性检查结果。
+
+如果新版本已经改变内容数据结构，必须先确认向后兼容或使用经过验证的数据迁移回滚方案，不能仅替换代码。
+
+## 12. 当前待办
+
+截至 2026-09-28：
+
+- [x] 3.5 HTTPS、安全响应头、强制 CSP、管理页禁用缓存和公网端口隔离已通过生产检查。
+- [ ] 将 `main` 当前干净构建部署到生产，替换不可追溯的旧构建。
+- [ ] 验证生产 `/api/bilibili/cache-stats`、`X-Feed-Cache` 和 `X-Image-Cache`。
+- [ ] 验证生产后台读取、版本冲突提示和内容保存。
+- [ ] 确认 `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
+- [ ] 为生产数据建立自动备份、校验和与恢复演练。
+
+PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。

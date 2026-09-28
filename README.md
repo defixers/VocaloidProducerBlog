@@ -2,6 +2,12 @@
 
 为 B 站中文 Vocaloid P 主 Utopia_乌托邦P 定制的个人博客与内容管理系统。项目使用 Vue 3 + Vite 构建主站，以 Express 提供文章、二创资源和后台管理 API。
 
+## 当前安全状态
+
+截至 2026-09-28，安全路线图 3.1 至 3.5 已完成并通过生产验收；3.6 至 3.8 的代码、自动化测试和 CI 已完成，但生产服务器仍需部署当前 `main` 的干净构建后才能完成生产验收。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+
+当前生产部署不得作为 3.6 至 3.8 的基准：最近一次检查中 `/build-info.json` 标记为 `dirty: true`，记录的提交已不在当前 Git 历史中，且 `/api/bilibili/cache-stats` 仍返回 `404`。发布时必须使用可追溯到当前 Git 提交且 `dirty: false` 的构建产物。
+
 ## 功能
 
 - 作品主页、文章归档、视频列表、动态展示与全文搜索
@@ -54,7 +60,7 @@ npm run server    # Express API
 VITE_BILIBILI_SYNC_URL=/api/bilibili/feed
 VITE_BILIBILI_SPACE_URL=https://space.bilibili.com/1858510441
 NODE_ENV=production
-APP_ORIGIN=https://www.utopiap.top
+APP_ORIGIN=https://www.utopiap.top,https://utopiap.top
 ARTICLE_IMAGE_HOSTS=
 ADMIN_PASSWORD_HASH=replace-with-output-of-npm-run-security-hash-password
 ADMIN_SESSION_IDLE_MINUTES=30
@@ -62,6 +68,8 @@ ADMIN_SESSION_ABSOLUTE_HOURS=8
 ADMIN_LOGIN_WINDOW_MINUTES=15
 ADMIN_LOGIN_IP_LIMIT=10
 ADMIN_LOGIN_ACCOUNT_LIMIT=30
+ADMIN_LOGIN_BACKOFF_BASE_MS=500
+ADMIN_LOGIN_BACKOFF_MAX_MS=30000
 ADMIN_LOGIN_CONCURRENCY=2
 ADMIN_WRITE_WINDOW_MINUTES=10
 ADMIN_WRITE_LIMIT=60
@@ -71,9 +79,17 @@ UPLOAD_TOTAL_QUOTA_MB=1024
 UPLOAD_WINDOW_MINUTES=60
 UPLOAD_LIMIT=10
 UPLOAD_CONCURRENCY=1
+UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB=512
+UPLOAD_ARCHIVE_MAX_FILES=1000
+UPLOAD_ARCHIVE_MAX_DEPTH=10
+UPLOAD_ARCHIVE_MAX_RATIO=100
+APP_STORAGE_ROOT=/var/lib/vocaloid-producer-blog
 UPLOAD_VIRUS_SCAN_COMMAND=clamscan
 UPLOAD_VIRUS_SCAN_ARGS=["--no-summary"]
+UPLOAD_SCAN_TIMEOUT_SECONDS=60
 TRUST_PROXY_HOPS=1
+SERVER_HEADERS_TIMEOUT_SECONDS=15
+SERVER_REQUEST_TIMEOUT_SECONDS=120
 PORT=8787
 ```
 
@@ -87,6 +103,8 @@ PORT=8787
 | `ADMIN_LOGIN_WINDOW_MINUTES` | 登录限流统计窗口，默认 15 分钟 |
 | `ADMIN_LOGIN_IP_LIMIT` | 单 IP 在统计窗口内允许的失败登录次数，默认 10 次 |
 | `ADMIN_LOGIN_ACCOUNT_LIMIT` | 管理账户在统计窗口内允许的总失败次数，默认 30 次 |
+| `ADMIN_LOGIN_BACKOFF_BASE_MS` | 登录失败指数退避的基础延迟，默认 500 毫秒 |
+| `ADMIN_LOGIN_BACKOFF_MAX_MS` | 登录失败指数退避的最大延迟，默认 30000 毫秒 |
 | `ADMIN_LOGIN_CONCURRENCY` | 同时执行的 Argon2id 密码验证数，默认 2 次 |
 | `ADMIN_WRITE_WINDOW_MINUTES` | 管理写接口限流窗口，默认 10 分钟 |
 | `ADMIN_WRITE_LIMIT` | 单会话在窗口内允许的管理写请求数，默认 60 次 |
@@ -105,6 +123,8 @@ PORT=8787
 | `UPLOAD_VIRUS_SCAN_ARGS` | 传给扫描程序的 JSON 字符串数组，文件路径会自动追加到末尾 |
 | `UPLOAD_SCAN_TIMEOUT_SECONDS` | 单次病毒扫描超时，默认 60 秒 |
 | `TRUST_PROXY_HOPS` | Express 信任的反向代理跳数；单层 Nginx 使用 `1` |
+| `SERVER_HEADERS_TIMEOUT_SECONDS` | Node HTTP 服务器接收完整请求头的超时，默认 15 秒 |
+| `SERVER_REQUEST_TIMEOUT_SECONDS` | Node HTTP 服务器处理完整请求的超时，默认 120 秒 |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
 | `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
@@ -230,7 +250,7 @@ npm run verify:build
 npm start
 ```
 
-`npm ci` 严格按锁文件安装依赖。`npm run verify:reproducible` 连续构建两次并比较全部文件的 SHA-256，成功后在 `dist/` 留下生产产物。`dist/build-info.json` 记录完整 Git 提交 SHA 和构建时工作区状态；`npm run verify:build` 只接受来自当前提交且工作区干净的产物。`npm start` 启动 Express，并在同一端口提供 API、受控资源下载和构建后的单页应用，默认地址为 `http://127.0.0.1:8787`。
+`npm ci` 严格按锁文件安装依赖。`npm run verify:reproducible` 连续构建两次并比较全部文件的 SHA-256，成功后在 `dist/` 留下生产产物。`dist/build-info.json` 记录完整 Git 提交 SHA 和构建时工作区状态；`npm run verify:build` 只接受来自当前提交且工作区干净的产物。`npm start` 启动 Express，并在同一端口提供 API、受控资源下载和构建后的单页应用。当前服务监听所有网卡的 `8787` 端口，生产环境必须通过云安全组和主机防火墙阻止公网直连。
 
 生产构建必须从干净的 Git 检出执行。运行时数据应通过 `APP_STORAGE_ROOT` 放在仓库外，避免 `server/data/content.json` 的生产修改污染构建来源。发布预构建产物时，应将部署记录中的提交传给校验命令：
 
@@ -238,111 +258,33 @@ npm start
 DEPLOY_COMMIT=完整的40位Git提交SHA npm run verify:build
 ```
 
-生产环境建议：
+生产环境要求：
 
 - 设置 `NODE_ENV=production`、正确的 `APP_ORIGIN` 和 `ADMIN_PASSWORD_HASH`
-- 使用 Nginx、Caddy 或其他反向代理提供 HTTPS
-- 将请求转发到 Express 的 `PORT`
-- 持久化并定期备份 `server/data/` 和 `server/uploads/`
-- 限制 `/admin` 的访问来源或增加额外认证层
+- 使用 Nginx、Caddy 或其他反向代理提供 HTTPS、强制 CSP 和安全响应头
+- 云安全组和主机防火墙禁止公网访问 Express 的 `PORT`
+- 使用 `APP_STORAGE_ROOT` 将生产数据放在 Git 工作区之外，并独立备份
+- 部署前验证 `dist/build-info.json`，部署后通过公开接口核对同一提交 SHA
+- `main` 只允许通过 Pull Request 合并，并要求安全构建与 CodeQL 检查成功
 
 不要只部署 `dist/`：纯静态部署可以浏览内置内容，但后台、动态文章和上传资源 API 将不可用。
 
 ### 反向代理示例
 
-如果前端静态文件和 Express 分开提供，必须确保 `/api/` 在 SPA 回退规则之前转发到 Express，并在 Nginx 明确拒绝 `/uploads/`。只允许 Nginx 访问 Express 端口，并使 `TRUST_PROXY_HOPS` 与实际代理层数一致。
+生产部署由 Express 同时提供 `dist`、SPA 回退和 API，Nginx 应将页面与 `/api/` 请求全部代理到 Express，不要再为同一站点增加独立的 `try_files ... /index.html` 回退。否则 API 路由可能错误返回 HTML，并在后台表现为 `Unexpected token '<'`。
 
-以下共享内存区域必须定义在 Nginx 的 `http` 块中：
-
-```nginx
-limit_req_zone $binary_remote_addr zone=admin_login:10m rate=5r/m;
-limit_req_zone $binary_remote_addr zone=admin_api:10m rate=30r/m;
-limit_req_zone $binary_remote_addr zone=bilibili_feed:10m rate=10r/m;
-limit_req_zone $binary_remote_addr zone=bilibili_image:10m rate=60r/m;
-limit_req_zone $binary_remote_addr zone=resource_download:10m rate=20r/m;
-limit_conn_zone $binary_remote_addr zone=admin_conn:10m;
-limit_conn_zone $binary_remote_addr zone=public_conn:10m;
-```
-
-`server` 块中的路由示例：
+完整的 Nginx 限流、TLS、安全响应头、CSP、systemd、发布和回滚配置见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。下面只保留最小路由结构：
 
 ```nginx
-client_header_timeout 15s;
-client_body_timeout 30s;
-send_timeout 120s;
-
-location = /api/admin/auth/login {
-    client_max_body_size 16k;
-    limit_req zone=admin_login burst=3 nodelay;
-    limit_conn admin_conn 5;
-
-    proxy_pass http://127.0.0.1:8787;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 15s;
-    proxy_read_timeout 15s;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
 location /api/admin/ {
     client_max_body_size 101m;
-    limit_req zone=admin_api burst=20 nodelay;
-    limit_conn admin_conn 5;
-
     proxy_pass http://127.0.0.1:8787;
-    proxy_connect_timeout 5s;
     proxy_send_timeout 120s;
     proxy_read_timeout 120s;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location = /api/bilibili/feed {
-    limit_req zone=bilibili_feed burst=10 nodelay;
-    limit_conn public_conn 4;
-    proxy_pass http://127.0.0.1:8787;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 15s;
-    proxy_read_timeout 15s;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location = /api/bilibili/image {
-    limit_req zone=bilibili_image burst=30 nodelay;
-    limit_conn public_conn 8;
-    proxy_pass http://127.0.0.1:8787;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 15s;
-    proxy_read_timeout 15s;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location ~ ^/api/resources/[^/]+/download$ {
-    limit_req zone=resource_download burst=10 nodelay;
-    limit_conn public_conn 4;
-    proxy_pass http://127.0.0.1:8787;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 120s;
-    proxy_read_timeout 120s;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 location /api/ {
     proxy_pass http://127.0.0.1:8787;
-    proxy_connect_timeout 5s;
-    proxy_send_timeout 30s;
-    proxy_read_timeout 30s;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 location /uploads/ {
@@ -350,17 +292,38 @@ location /uploads/ {
 }
 
 location / {
-    try_files $uri $uri/ /index.html;
+    proxy_pass http://127.0.0.1:8787;
 }
 ```
 
-后台出现 `Unexpected token '<'` 表示 `/api/` 返回了 `index.html`，通常是 SPA 的 `try_files` 或重写规则优先于 API 代理。调整为上述顺序后再检查：
+所有代理位置还必须传递 `Host`、`X-Forwarded-For` 和 `X-Forwarded-Proto`，并配置合理的连接与读取超时。后台出现 `Unexpected token '<'` 时，先检查 `/api/` 是否被 SPA 回退规则接管：
 
 ```bash
 curl -i https://你的域名/api/health
 ```
 
 正常响应的 `Content-Type` 应为 `application/json`，正文为 `{"ok":true}`。
+
+### 生产发布门禁
+
+每次生产发布至少完成以下检查：
+
+```bash
+git status --porcelain=v1
+git rev-parse HEAD
+npm ci
+npm run security:supply-chain
+npm audit --audit-level=high --registry=https://registry.npmjs.org
+npm run security:secrets
+npm run test:auth
+npm run test:uploads
+npm run test:public
+npm run test:content
+npm run verify:reproducible
+npm run verify:build
+```
+
+第一条命令必须没有输出。服务重启后还要检查 `/build-info.json` 的 `commit` 与部署提交一致且 `dirty` 为 `false`，并验证 `/api/health`、`/api/bilibili/cache-stats`、后台登录和一次只读内容加载。不得从包含生产数据修改的 Git 工作区直接构建。
 
 ## 验证命令
 
@@ -375,6 +338,7 @@ npm run security:supply-chain # 精确版本、锁文件、许可证、弃用和
 npm run verify:reproducible   # 双构建文件哈希一致性检查
 npm run verify:build          # 构建产物 Git SHA 与工作区状态检查
 npm run security:secrets
+npm audit --audit-level=high --registry=https://registry.npmjs.org
 npm run optimize:images
 ```
 
@@ -386,7 +350,7 @@ npm run optimize:images
 
 GitHub Actions 对每次 `main` 推送和 Pull Request 执行 `npm ci`、完整依赖审计、敏感文件检查、全部安全测试、双构建一致性检查及构建来源验证。CodeQL 额外执行 JavaScript/TypeScript 扩展安全查询，Dependabot 每周检查 npm 依赖、每月检查 Actions。所有 Actions 均固定到完整提交 SHA。
 
-在 GitHub 分支保护中将 `Security and reproducible build / verify` 和 `CodeQL / analyze` 设置为 `main` 的必需检查，使新增高危漏洞或静态分析失败直接阻止合并。CI 产物名称包含提交 SHA，并保留 14 天。
+在 GitHub 分支保护中要求所有修改通过 Pull Request，并将 `Security and reproducible build / verify` 和 `CodeQL / analyze` 设置为 `main` 的必需检查，使新增高危漏洞或静态分析失败直接阻止合并。CI 产物名称包含提交 SHA，并保留 14 天。Dependabot PR 不能自动视为安全升级，仍需检查破坏性变更、测试结果和对现有安全边界的影响。
 
 ## 项目结构
 
@@ -401,6 +365,8 @@ src/
   services/             后台 API 与 Bilibili 同步客户端
   AdminApp.vue          管理后台
   App.vue               主站
+PRODUCTION_DEPLOYMENT.md 生产部署、安全验收与回滚手册
+SECURITY_ROADMAP.md      安全阶段状态、证据与后续目标
 ```
 
 ## 开源协议
