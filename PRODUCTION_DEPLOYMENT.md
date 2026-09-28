@@ -377,15 +377,15 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 
 如果新版本已经改变内容数据结构，必须先确认向后兼容或使用经过验证的数据迁移回滚方案，不能仅替换代码。
 
-## 12. 当前待办
+## 12. 验收状态与后续待办
 
 截至 2026-09-28：
 
 - [x] 3.5 HTTPS、安全响应头、强制 CSP、管理页禁用缓存和公网端口隔离已通过生产检查。
-- [ ] 将 `main` 当前干净构建部署到生产，替换不可追溯的旧构建。
-- [ ] 验证生产 `/api/bilibili/cache-stats`、`X-Feed-Cache` 和 `X-Image-Cache`。
-- [ ] 验证生产后台读取、版本冲突提示和内容保存。
-- [ ] 确认 `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
+- [x] 3.6 Bilibili 代理、缓存指标、危险目标拒绝和资源限制已通过生产检查。
+- [x] 3.7 后台读取、内容保存、输入校验和版本冲突已通过生产冒烟测试。
+- [x] 3.8 生产构建可追溯到 `6137eed8847666683fa58f605eb83ad329c0b74d`，且 `dirty: false`。
+- [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
 - [ ] 为生产数据建立自动备份、校验和与恢复演练。
 
 PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。

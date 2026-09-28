@@ -4,9 +4,9 @@
 
 ## 当前安全状态
 
-截至 2026-09-28，安全路线图 3.1 至 3.5 已完成并通过生产验收；3.6 至 3.8 的代码、自动化测试和 CI 已完成，但生产服务器仍需部署当前 `main` 的干净构建后才能完成生产验收。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+截至 2026-09-28，安全路线图 3.1 至 3.8 已全部完成并通过生产验收。生产环境运行可追溯的干净构建，HTTPS、安全响应头、后台认证、上传下载、Bilibili 代理、内容验证和供应链检查均已验证。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
-当前生产部署不得作为 3.6 至 3.8 的基准：最近一次检查中 `/build-info.json` 标记为 `dirty: true`，记录的提交已不在当前 Git 历史中，且 `/api/bilibili/cache-stats` 仍返回 `404`。发布时必须使用可追溯到当前 Git 提交且 `dirty: false` 的构建产物。
+本次验收对应提交为 `6137eed8847666683fa58f605eb83ad329c0b74d`。线上 `/build-info.json` 与该提交一致且 `dirty: false`；后续发布仍必须重新执行完整门禁，不能沿用本次结果。
 
 ## 功能
 
