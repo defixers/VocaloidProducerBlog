@@ -35,6 +35,7 @@ jobs:
       - run: npm run test:uploads
       - run: npm run test:public
       - run: npm run test:content
+      - run: npm run test:monitoring
       - run: npm run verify:reproducible
         env:
           BUILD_COMMIT: ${{ github.sha }}

@@ -23,6 +23,7 @@ const server = spawn(process.execPath, ['server/index.js'], {
     ...process.env,
     PORT: String(port),
     NODE_ENV: 'production',
+    SECURITY_LOG_IP_KEY: 'integration-test-ip-key-with-32-characters',
     APP_ORIGIN: origin,
     APP_STORAGE_ROOT: storageRoot,
     ADMIN_PASSWORD_HASH: passwordHash,
@@ -213,6 +214,7 @@ try {
   assert.match(serverOutput, /"event":"admin_resource_upload","outcome":"succeeded"/)
   assert.match(serverOutput, /"event":"admin_resource_upload","outcome":"rejected"/)
   assert.match(serverOutput, /"event":"admin_resource_delete","outcome":"succeeded"/)
+  assert.match(serverOutput, /"event":"server_error","outcome":"failed".*"statusCode":503/)
   assert.ok(!serverOutput.includes(password))
 
   const storedContent = JSON.parse(await readFile(join(storageRoot, 'data', 'content.json'), 'utf8'))

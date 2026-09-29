@@ -62,7 +62,7 @@ function requestBuffer(url, addresses, options) {
   return new Promise((resolve, reject) => {
     const signal = AbortSignal.timeout(options.timeoutMs)
     const request = options.requestImpl(url, {
-      method: 'GET',
+      method: options.method || 'GET',
       headers: options.headers,
       signal,
       servername: url.hostname,
@@ -103,8 +103,38 @@ function requestBuffer(url, addresses, options) {
       }
       reject(new UpstreamSecurityError('upstream_request_failed'))
     })
-    request.end()
+    request.end(options.body)
   })
+}
+
+export async function postSecureWebhook(value, payload, {
+  allowedHosts,
+  maxBytes = 64 * 1024,
+  timeoutMs,
+  resolveHost = lookup,
+  requestImpl = httpsRequest,
+}) {
+  const url = validateUpstreamUrl(value, allowedHosts)
+  const body = Buffer.from(JSON.stringify(payload), 'utf8')
+  if (body.length > maxBytes) throw new UpstreamSecurityError('webhook_payload_too_large')
+  const addresses = await resolvePublicAddresses(url.hostname, resolveHost)
+  const response = await requestBuffer(url, addresses, {
+    method: 'POST',
+    body,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'Content-Length': String(body.length),
+      'User-Agent': 'VocaloidProducerBlog-SecurityMonitor/1.0',
+    },
+    maxBytes,
+    timeoutMs,
+    requestImpl,
+  })
+  if (response.status < 200 || response.status >= 300) {
+    throw new UpstreamSecurityError('webhook_rejected')
+  }
+  return response
 }
 
 export async function fetchUpstreamBuffer(value, {

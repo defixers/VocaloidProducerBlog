@@ -45,6 +45,7 @@ const server = spawn(process.execPath, ['server/index.js'], {
     ...process.env,
     PORT: String(port),
     NODE_ENV: 'production',
+    SECURITY_LOG_IP_KEY: 'integration-test-ip-key-with-32-characters',
     APP_ORIGIN: origin,
     APP_STORAGE_ROOT: storageRoot,
     ADMIN_PASSWORD_HASH: passwordHash,
@@ -155,6 +156,10 @@ try {
   assert.equal(stored.version, 2)
   assert.equal(stored.articles.length, 2)
   assert.equal(stored.resources.length, 0)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.match(serverOutput, /"event":"admin_article_create","outcome":"succeeded"/)
+  assert.ok(!serverOutput.includes('有效文章'))
+  assert.ok(!serverOutput.includes('# 正文'))
   console.log('Content validation and Markdown security tests passed.')
 } finally {
   server.kill()

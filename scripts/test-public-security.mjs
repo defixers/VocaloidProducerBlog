@@ -10,6 +10,7 @@ import {
   UpstreamSecurityError,
   fetchUpstreamBuffer,
   isPublicAddress,
+  postSecureWebhook,
   validateUpstreamUrl,
 } from '../server/security/upstream.js'
 
@@ -21,9 +22,10 @@ function fakeRequest(steps) {
   return (url, options, callback) => {
     const request = new EventEmitter()
     request.destroy = (error) => queueMicrotask(() => request.emit('error', error))
-    request.end = () => {
+    request.end = (body) => {
       const step = steps[index++]
       assert.ok(step, `Unexpected request to ${url.href}`)
+      if (step.inspect) step.inspect({ body, options, url })
       if (step.hang) {
         const keepAlive = setTimeout(() => {}, 1000)
         options.signal.addEventListener('abort', () => {
@@ -115,6 +117,33 @@ await expectCode(fetchUpstreamBuffer('https://i0.hdslb.com/image.webp', {
   requestImpl: fakeRequest([{ hang: true }]),
 }), 'upstream_timeout')
 
+const webhook = await postSecureWebhook('https://i0.hdslb.com/security-alert', { event: 'test' }, {
+  allowedHosts,
+  timeoutMs: 100,
+  resolveHost: publicResolver,
+  requestImpl: fakeRequest([{
+    status: 204,
+    inspect: ({ body, options }) => {
+      assert.equal(options.method, 'POST')
+      assert.equal(options.headers['Content-Type'], 'application/json')
+      assert.deepEqual(JSON.parse(body.toString()), { event: 'test' })
+    },
+  }]),
+})
+assert.equal(webhook.status, 204)
+await expectCode(postSecureWebhook('https://i0.hdslb.com/security-alert', { event: 'test' }, {
+  allowedHosts,
+  timeoutMs: 100,
+  resolveHost: async () => [{ address: '127.0.0.1', family: 4 }],
+  requestImpl: fakeRequest([]),
+}), 'upstream_address_blocked')
+await expectCode(postSecureWebhook('https://i0.hdslb.com/security-alert', { event: 'test' }, {
+  allowedHosts,
+  timeoutMs: 100,
+  resolveHost: publicResolver,
+  requestImpl: fakeRequest([{ status: 500 }]),
+}), 'webhook_rejected')
+
 const port = 18789
 const storageRoot = await mkdtemp(join(tmpdir(), 'utopia-public-test-'))
 await mkdir(join(storageRoot, 'data'), { recursive: true })
@@ -127,6 +156,7 @@ const server = spawn(process.execPath, ['server/index.js'], {
     ...process.env,
     PORT: String(port),
     NODE_ENV: 'production',
+    SECURITY_LOG_IP_KEY: 'integration-test-ip-key-with-32-characters',
     APP_ORIGIN: 'https://admin.example.test',
     APP_STORAGE_ROOT: storageRoot,
     ADMIN_PASSWORD_HASH: await hashAdminPassword('public-security-test-password'),

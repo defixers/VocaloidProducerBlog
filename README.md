@@ -90,6 +90,20 @@ UPLOAD_SCAN_TIMEOUT_SECONDS=60
 TRUST_PROXY_HOPS=1
 SERVER_HEADERS_TIMEOUT_SECONDS=15
 SERVER_REQUEST_TIMEOUT_SECONDS=120
+SECURITY_LOG_IP_KEY=replace-with-at-least-32-random-characters
+SECURITY_ALERT_WINDOW_MINUTES=10
+SECURITY_ALERT_COOLDOWN_MINUTES=30
+SECURITY_ALERT_LOGIN_FAILURES=10
+SECURITY_ALERT_UPLOAD_REJECTIONS=5
+SECURITY_ALERT_SERVER_ERRORS=5
+SECURITY_ALERT_PROXY_FAILURES=10
+SECURITY_ALERT_PROXY_MIN_REQUESTS=10
+SECURITY_ALERT_PROXY_FAILURE_RATE_PERCENT=50
+SECURITY_DISK_MIN_FREE_MB=1024
+SECURITY_DISK_CHECK_MINUTES=5
+SECURITY_ALERT_WEBHOOK_URL=
+SECURITY_ALERT_WEBHOOK_HOSTS=
+SECURITY_ALERT_TIMEOUT_SECONDS=5
 PORT=8787
 ```
 
@@ -125,6 +139,20 @@ PORT=8787
 | `TRUST_PROXY_HOPS` | Express 信任的反向代理跳数；单层 Nginx 使用 `1` |
 | `SERVER_HEADERS_TIMEOUT_SECONDS` | Node HTTP 服务器接收完整请求头的超时，默认 15 秒 |
 | `SERVER_REQUEST_TIMEOUT_SECONDS` | Node HTTP 服务器处理完整请求的超时，默认 120 秒 |
+| `SECURITY_LOG_IP_KEY` | 来源 IP HMAC 脱敏密钥；生产环境至少 32 个字符，使用 `openssl rand -hex 32` 生成 |
+| `SECURITY_ALERT_WINDOW_MINUTES` | 登录失败、异常上传、5xx 和代理失败的统计窗口，默认 10 分钟 |
+| `SECURITY_ALERT_COOLDOWN_MINUTES` | 同类告警的静默时间，默认 30 分钟 |
+| `SECURITY_ALERT_LOGIN_FAILURES` | 窗口内触发暴力登录告警的失败次数，默认 10 次 |
+| `SECURITY_ALERT_UPLOAD_REJECTIONS` | 窗口内触发异常上传告警的拒绝次数，默认 5 次 |
+| `SECURITY_ALERT_SERVER_ERRORS` | 窗口内触发服务端错误告警的 5xx 次数，默认 5 次 |
+| `SECURITY_ALERT_PROXY_FAILURES` | 窗口内触发代理异常告警所需的最少失败次数，默认 10 次 |
+| `SECURITY_ALERT_PROXY_MIN_REQUESTS` | 计算代理失败率所需的最少上游请求样本，默认 10 次 |
+| `SECURITY_ALERT_PROXY_FAILURE_RATE_PERCENT` | 触发代理异常告警的失败率，默认 50% |
+| `SECURITY_DISK_MIN_FREE_MB` | 触发磁盘空间告警的剩余容量下限，默认 1024 MB |
+| `SECURITY_DISK_CHECK_MINUTES` | 磁盘剩余空间检查周期，默认 5 分钟 |
+| `SECURITY_ALERT_WEBHOOK_URL` | 可选的公网 HTTPS JSON 告警接收地址，完整地址仅保存在服务端 `.env` |
+| `SECURITY_ALERT_WEBHOOK_HOSTS` | Webhook 精确域名白名单；配置 URL 时必填，多个域名使用逗号分隔 |
+| `SECURITY_ALERT_TIMEOUT_SECONDS` | Webhook 请求超时，默认 5 秒 |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
 | `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
@@ -157,7 +185,9 @@ npm run security:hash-password
 
 后台登录成功后只在浏览器中设置 `HttpOnly`、`SameSite=Strict` 会话 Cookie。前端不保存管理密码或长期令牌；写操作还需要匹配的 Origin 和 CSRF Token。会话默认空闲 30 分钟或登录 8 小时后失效，退出登录会立即吊销当前会话。
 
-后台登录按 IP 和管理账户分别限流，连续失败会触发指数退避，同时限制 Argon2id 验证并发数。管理写接口按会话限制请求频率和并发数，JSON 请求体上限为 512 KB。安全日志使用单行 JSON，记录请求 ID、来源 IP、事件和结果，不记录密码、Cookie、CSRF Token 或 Authorization Header。
+后台登录按 IP 和管理账户分别限流，连续失败会触发指数退避，同时限制 Argon2id 验证并发数。管理写接口按会话限制请求频率和并发数，JSON 请求体上限为 512 KB。安全日志使用单行 JSON，记录请求 ID、来源 IP 的 HMAC 标识、事件和结果，不记录密码、Cookie、CSRF Token、Authorization Header、文章标题或正文。日志覆盖登录、会话吊销、文章增删改和资源上传删除；暴力登录、异常上传、持续 `5xx`、Bilibili 代理失败和低磁盘空间会触发带冷却时间的告警。
+
+未配置 Webhook 时，告警仍以 `security_alert` JSON 写入标准错误。配置后可使用 `npm run security:test-alert` 验证实际送达；Webhook 只允许连接显式白名单中的公网 HTTPS 主机。生产日志的采集、权限和保留策略见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
 仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
 

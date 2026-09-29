@@ -9,6 +9,7 @@ import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import multer from 'multer'
 import { hashAdminPassword, isAdminPasswordHash, verifyAdminPassword } from './security/password.js'
+import { createSecurityMonitor } from './security/audit.js'
 import {
   ContentValidationError,
   createArticleInputSchema,
@@ -24,7 +25,7 @@ import {
   uploadContentType,
   validateUploadMetadata,
 } from './security/upload.js'
-import { UpstreamSecurityError, fetchUpstreamBuffer, validateUpstreamUrl } from './security/upstream.js'
+import { UpstreamSecurityError, fetchUpstreamBuffer, postSecureWebhook, validateUpstreamUrl } from './security/upstream.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -105,6 +106,8 @@ const serverHeadersTimeoutMs = env.SERVER_HEADERS_TIMEOUT_SECONDS * 1000
 const serverRequestTimeoutMs = env.SERVER_REQUEST_TIMEOUT_SECONDS * 1000
 const bilibiliUid = env.BILIBILI_UID
 const bilibiliCookie = env.BILIBILI_COOKIE
+const securityIpKey = env.SECURITY_LOG_IP_KEY || (isProduction ? '' : crypto.randomBytes(32).toString('hex'))
+const securityWebhookHosts = new Set(env.SECURITY_ALERT_WEBHOOK_HOSTS)
 const bilibiliCache = { expiresAt: 0, payload: null }
 const bilibiliImageCache = new Map()
 const bilibiliImagePending = new Map()
@@ -141,9 +144,40 @@ if (isProduction && [...allowedOrigins].some((origin) => !origin.startsWith('htt
   throw new Error('APP_ORIGIN must use HTTPS in production.')
 }
 if (loginBackoffMaxMs < loginBackoffBaseMs) throw new Error('ADMIN_LOGIN_BACKOFF_MAX_MS 不能小于 ADMIN_LOGIN_BACKOFF_BASE_MS。')
+if (isProduction && securityIpKey.length < 32) {
+  throw new Error('SECURITY_LOG_IP_KEY must contain at least 32 characters in production.')
+}
+if (env.SECURITY_ALERT_WEBHOOK_URL) {
+  if (!securityWebhookHosts.size) throw new Error('SECURITY_ALERT_WEBHOOK_HOSTS is required when a webhook is configured.')
+  validateUpstreamUrl(env.SECURITY_ALERT_WEBHOOK_URL, securityWebhookHosts)
+}
 
 await mkdir(dataDir, { recursive: true })
 await mkdir(uploadDir, { recursive: true })
+
+const securityMonitor = createSecurityMonitor({
+  ipKey: securityIpKey,
+  storageRoot,
+  windowMinutes: env.SECURITY_ALERT_WINDOW_MINUTES,
+  cooldownMinutes: env.SECURITY_ALERT_COOLDOWN_MINUTES,
+  proxyMinRequests: env.SECURITY_ALERT_PROXY_MIN_REQUESTS,
+  proxyFailureRate: env.SECURITY_ALERT_PROXY_FAILURE_RATE_PERCENT / 100,
+  diskMinFreeBytes: Math.floor(env.SECURITY_DISK_MIN_FREE_MB * 1024 * 1024),
+  diskCheckMinutes: env.SECURITY_DISK_CHECK_MINUTES,
+  thresholds: {
+    loginFailures: env.SECURITY_ALERT_LOGIN_FAILURES,
+    uploadRejections: env.SECURITY_ALERT_UPLOAD_REJECTIONS,
+    serverErrors: env.SECURITY_ALERT_SERVER_ERRORS,
+    proxyFailures: env.SECURITY_ALERT_PROXY_FAILURES,
+  },
+}, {
+  deliverAlert: env.SECURITY_ALERT_WEBHOOK_URL
+    ? (alert) => postSecureWebhook(env.SECURITY_ALERT_WEBHOOK_URL, alert, {
+        allowedHosts: securityWebhookHosts,
+        timeoutMs: env.SECURITY_ALERT_TIMEOUT_SECONDS * 1000,
+      })
+    : null,
+})
 
 const app = express()
 app.disable('x-powered-by')
@@ -151,6 +185,14 @@ app.set('trust proxy', trustProxyHops)
 app.use((request, response, next) => {
   request.requestId = crypto.randomUUID()
   response.set('X-Request-Id', request.requestId)
+  response.once('finish', () => {
+    if (response.statusCode >= 500) {
+      securityLog('server_error', request, 'failed', {
+        reason: 'http_server_error',
+        statusCode: response.statusCode,
+      })
+    }
+  })
   next()
 })
 app.use(express.json({ limit: '512kb' }))
@@ -345,17 +387,7 @@ function requireCsrf(request, response, next) {
 }
 
 function securityLog(event, request, outcome, details = {}) {
-  console.log(JSON.stringify({
-    level: 'security',
-    time: new Date().toISOString(),
-    event,
-    outcome,
-    requestId: request.requestId,
-    ip: request.ip || request.socket.remoteAddress || 'unknown',
-    method: request.method,
-    path: request.path,
-    ...details,
-  }))
+  return securityMonitor.audit(event, request, outcome, details)
 }
 
 function sendRateLimited(request, response, event, retryAfterSeconds = 60) {
@@ -768,33 +800,33 @@ function upstreamErrorCode(error) {
 }
 
 function logUpstreamFailure(event, error) {
-  console.error(JSON.stringify({
-    level: 'upstream',
-    time: new Date().toISOString(),
-    event,
-    outcome: 'failed',
-    reason: upstreamErrorCode(error),
-  }))
+  securityLog(event, null, 'failed', { reason: upstreamErrorCode(error) })
 }
 
 async function fetchBilibiliImage(imageUrl) {
-  const upstream = await fetchUpstreamBuffer(imageUrl, {
-    allowedHosts: bilibiliImageHosts,
-    headers: {
-      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-      Referer: 'https://www.bilibili.com/',
-      'User-Agent': bilibiliHeaders()['User-Agent'],
-    },
-    maxBytes: bilibiliImageMaxBytes,
-    maxRedirects: bilibiliRedirectLimit,
-    timeoutMs: bilibiliUpstreamTimeoutMs,
-  })
-  const contentType = String(upstream.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase()
-  const allowedContentTypes = new Set(['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp'])
-  if (upstream.status < 200 || upstream.status >= 300 || !allowedContentTypes.has(contentType)) {
-    throw new UpstreamSecurityError('bilibili_image_invalid')
+  try {
+    const upstream = await fetchUpstreamBuffer(imageUrl, {
+      allowedHosts: bilibiliImageHosts,
+      headers: {
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        Referer: 'https://www.bilibili.com/',
+        'User-Agent': bilibiliHeaders()['User-Agent'],
+      },
+      maxBytes: bilibiliImageMaxBytes,
+      maxRedirects: bilibiliRedirectLimit,
+      timeoutMs: bilibiliUpstreamTimeoutMs,
+    })
+    const contentType = String(upstream.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase()
+    const allowedContentTypes = new Set(['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp'])
+    if (upstream.status < 200 || upstream.status >= 300 || !allowedContentTypes.has(contentType)) {
+      throw new UpstreamSecurityError('bilibili_image_invalid')
+    }
+    securityMonitor.observeProxy('succeeded')
+    return { body: upstream.body, contentType, expiresAt: Date.now() + 6 * 60 * 60 * 1000 }
+  } catch (error) {
+    securityMonitor.observeProxy('failed')
+    throw error
   }
-  return { body: upstream.body, contentType, expiresAt: Date.now() + 6 * 60 * 60 * 1000 }
 }
 
 async function refreshBilibiliFeed() {
@@ -804,6 +836,8 @@ async function refreshBilibiliFeed() {
   ])
   const videoUnavailable = videoResult.status === 'rejected'
   const dynamicUnavailable = dynamicResult.status === 'rejected'
+  securityMonitor.observeProxy(videoUnavailable ? 'failed' : 'succeeded')
+  securityMonitor.observeProxy(dynamicUnavailable ? 'failed' : 'succeeded')
   if (videoUnavailable) logUpstreamFailure('bilibili_video_sync', videoResult.reason)
   if (dynamicUnavailable) logUpstreamFailure('bilibili_dynamic_sync', dynamicResult.reason)
   const videoStale = videoUnavailable && Boolean(bilibiliCache.payload?.videos?.length)
@@ -1047,6 +1081,10 @@ app.post('/api/admin/articles', ...protectAdminWrite, async (request, response, 
       content.articles.unshift(article)
       return persistContentMutation(content)
     })
+    securityLog('admin_article_create', request, 'succeeded', {
+      articleId: article.id,
+      status: article.status,
+    })
     response.status(201).json({ article, version })
   } catch (error) {
     next(error)
@@ -1066,6 +1104,10 @@ app.put('/api/admin/articles/:id', ...protectAdminWrite, async (request, respons
       return { status: 'saved', article: nextArticle, version }
     })
     if (result.status === 'missing') return response.status(404).json({ error: '文章不存在' })
+    securityLog('admin_article_update', request, 'succeeded', {
+      articleId: result.article.id,
+      status: result.article.status,
+    })
     response.json({ article: result.article, version: result.version })
   } catch (error) {
     next(error)
@@ -1083,6 +1125,7 @@ app.delete('/api/admin/articles/:id', ...protectAdminWrite, async (request, resp
       return { version: await persistContentMutation(content) }
     })
     if (!result) return response.status(404).json({ error: '文章不存在' })
+    securityLog('admin_article_delete', request, 'succeeded', { articleId: request.params.id })
     response.json(result)
   } catch (error) {
     next(error)
@@ -1202,13 +1245,6 @@ app.use((error, request, response, _next) => {
     return response.status(status).json({ error: status === 413 ? '上传文件超过限制' : '上传请求无效' })
   }
 
-  console.error(JSON.stringify({
-    level: 'error',
-    time: new Date().toISOString(),
-    requestId: request.requestId,
-    name: error.name,
-  }))
-
   if (error?.type === 'entity.too.large') {
     return response.status(413).json({ error: '请求内容超过限制' })
   }
@@ -1228,6 +1264,8 @@ const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Content server: http://127.0.0.1:${port}`)
   if (!isProduction) console.log('Development admin password: utopia-dev')
 })
+
+securityMonitor.startDiskMonitoring()
 
 server.headersTimeout = serverHeadersTimeoutMs
 server.requestTimeout = serverRequestTimeoutMs

@@ -14,6 +14,7 @@ const server = spawn(process.execPath, ['server/index.js'], {
     ...process.env,
     PORT: String(port),
     NODE_ENV: 'production',
+    SECURITY_LOG_IP_KEY: 'integration-test-ip-key-with-32-characters',
     APP_ORIGIN: origin,
     ADMIN_PASSWORD_HASH: passwordHash,
     ADMIN_SESSION_IDLE_MINUTES: '0.01',
@@ -151,7 +152,7 @@ try {
 
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.match(serverOutput, /"event":"admin_login"/)
-  assert.match(serverOutput, /"ip":"[^"]+"/)
+  assert.match(serverOutput, /"sourceIp":"hmac-sha256:[a-f0-9]{24}"/)
   assert.ok(!serverOutput.includes(password))
   assert.ok(!serverOutput.includes(malformedBodySecret))
   assert.ok(!serverOutput.includes(first.cookie))

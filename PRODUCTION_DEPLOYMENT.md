@@ -52,6 +52,7 @@ TRUST_PROXY_HOPS=1
 PORT=8787
 APP_STORAGE_ROOT=/var/lib/vocaloid-producer-blog
 ADMIN_PASSWORD_HASH=有效的Argon2id哈希
+SECURITY_LOG_IP_KEY=至少32字符的随机密钥
 UPLOAD_VIRUS_SCAN_COMMAND=clamscan
 UPLOAD_VIRUS_SCAN_ARGS=["--no-summary"]
 ```
@@ -63,6 +64,12 @@ chmod 600 .env
 ```
 
 `VITE_` 前缀的值会进入浏览器产物，禁止用于 Cookie、密码、令牌或签名密钥。
+
+生成独立的日志 IP 脱敏密钥，不得复用管理密码或其他令牌：
+
+```bash
+openssl rand -hex 32
+```
 
 ## 4. 发布前检查
 
@@ -89,6 +96,7 @@ npm run test:auth
 npm run test:uploads
 npm run test:public
 npm run test:content
+npm run test:monitoring
 npm run verify:reproducible
 npm run verify:build
 ```
@@ -151,6 +159,46 @@ sudo systemctl enable --now vocaloid-producer-blog
 sudo systemctl status vocaloid-producer-blog
 sudo journalctl -u vocaloid-producer-blog -n 100 --no-pager
 ```
+
+### 5.1 安全日志、保留与告警
+
+应用将单行 JSON 写入 stdout/stderr，由 systemd-journald 集中采集。来源 IP 只记录不可逆的 HMAC 标识；不要将 `SECURITY_LOG_IP_KEY` 提交到仓库。创建 `/etc/systemd/journald.conf.d/vocaloid-blog.conf`：
+
+```ini
+[Journal]
+SystemMaxUse=500M
+MaxRetentionSec=30day
+Compress=yes
+Seal=yes
+```
+
+应用配置并确认日志目录权限：
+
+```bash
+sudo systemctl restart systemd-journald
+sudo stat -c '%U %G %a %n' /var/log/journal
+sudo journalctl -u vocaloid-producer-blog --since '30 minutes ago' -o cat
+```
+
+日志读取权限仅授予 `root` 和确需排障的 `systemd-journal` 组成员，不要让 Web 服务账户加入该组。上述保留配置作用于本机全部 journald 日志；若服务器已有统一日志策略，应在容量评估后合并配置，而不是直接覆盖。
+
+告警阈值使用 `.env.example` 中的 `SECURITY_ALERT_*` 与 `SECURITY_DISK_*` 配置。未配置 Webhook 时，告警仍进入 journald。需要外发时配置一个接收 JSON 的公网 HTTPS 端点，并将其精确域名加入白名单：
+
+```dotenv
+SECURITY_ALERT_WEBHOOK_URL=https://alerts.example.com/hooks/保密路径
+SECURITY_ALERT_WEBHOOK_HOSTS=alerts.example.com
+SECURITY_ALERT_TIMEOUT_SECONDS=5
+```
+
+Webhook URL 可能包含密钥，只能保存在权限为 `600` 的 `.env` 中。服务端会拒绝 HTTP、IP 字面量、非标准端口、非白名单主机以及解析到私网或环回地址的目标。重启应用后执行送达验收并记录收到告警的时间：
+
+```bash
+npm run security:test-alert
+sudo journalctl -u vocaloid-producer-blog --since '5 minutes ago' -o cat \
+  | grep -E 'security_alert|security_alert_delivery'
+```
+
+命令必须输出 `Security test alert delivered successfully.`，接收端应在约定时间内收到 `event: test`，日志中应同时出现 `security_alert_delivery` 的 `succeeded` 记录。若送达失败，脚本返回非零状态，先检查白名单、DNS、证书和接收端响应，不得通过放宽 SSRF 校验解决。
 
 仅从服务器本机验证 Express：
 
@@ -386,6 +434,7 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 - [x] 3.7 后台读取、内容保存、输入校验和版本冲突已通过生产冒烟测试。
 - [x] 3.8 生产构建可追溯到 `6137eed8847666683fa58f605eb83ad329c0b74d`，且 `dirty: false`。
 - [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
+- [ ] 为 3.9 配置生产告警 Webhook，执行 `npm run security:test-alert` 并记录实际送达时间。
 - [ ] 为生产数据建立自动备份、校验和与恢复演练。
 
 PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。
