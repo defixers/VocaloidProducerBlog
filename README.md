@@ -204,6 +204,14 @@ npm run security:hash-password
 
 `npm run backup:create` 会备份文章数据、上传资源和服务端 `.env`，使用 AES-256-GCM 认证加密并生成 SHA-256 校验文件。生产环境必须将加密文件和校验文件复制到离机存储，否则命令失败。生产备份配置使用 [backup.env.example](deploy/backup.env.example) 单独部署，不能由应用账户修改。`npm run backup:restore` 只允许恢复到空目录且拒绝覆盖现有环境文件；`npm run backup:drill` 在临时目录执行完整恢复、逐文件校验和资源一致性检查，并保存演练记录。定时任务、密钥隔离、离机存储和恢复步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
+Alibaba Cloud Linux 3 可直接运行一键安装脚本：
+
+```bash
+sudo bash deploy/setup-alinux3-backup.sh
+```
+
+脚本默认允许暂不配置 OSS，完成本机加密备份、隔离权限、systemd 定时器、首份备份和首次恢复演练。具备外部存储条件后重新运行脚本并选择启用 OSS，即可增加离机副本。仅本机备份不能应对整机损坏或服务器失陷，不满足 3.10 的最终验收要求。
+
 仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
 
 ```bash

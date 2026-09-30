@@ -37,6 +37,7 @@
     "test:content": "node scripts/test-content-security.mjs",
     "test:monitoring": "node scripts/test-security-monitoring.mjs",
     "test:backup": "node scripts/test-backup-recovery.mjs",
+    "test:deploy": "node scripts/check-deploy-script.mjs",
     "security:supply-chain": "node scripts/check-supply-chain.mjs",
     "security:secrets": "node scripts/check-sensitive-files.mjs",
     "security:hash-password": "node scripts/hash-admin-password.mjs",

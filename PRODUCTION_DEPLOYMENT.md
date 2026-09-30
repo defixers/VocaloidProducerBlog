@@ -101,6 +101,7 @@ npm run test:public
 npm run test:content
 npm run test:monitoring
 npm run test:backup
+npm run test:deploy
 npm run verify:reproducible
 npm run verify:build
 ```
@@ -207,6 +208,22 @@ sudo journalctl -u vocaloid-producer-blog --since '5 minutes ago' -o cat \
 
 目标为 RPO 不超过 24 小时、RTO 不超过 2 小时。备份定时器每 12 小时运行一次。备份采用在线一致性快照：复制前后比较 `content.json`，检测到管理写入或资源变化时自动重试，并在加密前验证资源引用，因此不会中断网站服务。备份内容包括 `data/`、`uploads/` 和生产 `.env`，密钥与副本权限必须按敏感凭据管理。
 
+#### Alibaba Cloud Linux 3 一键安装
+
+在服务器的项目目录执行：
+
+```bash
+sudo bash deploy/setup-alinux3-backup.sh
+```
+
+脚本默认询问是否启用 OSS。选择 `no` 时不需要任何外部存储，自动完成备份账户、ACL、密钥、root 只读程序、独立配置、systemd 单元、首份本机加密备份、首次恢复演练和定时器启用。该模式只能临时防范应用数据误删，不能应对整机损坏、系统盘丢失或服务器失陷，并且不满足 3.10 的离机副本验收要求。
+
+具备外部存储条件后，提前创建私有 OSS Bucket 和专用 RAM 用户，再次运行同一脚本并选择 `yes`。RAM 用户只授予目标 Bucket 前缀所需的列举、上传、读取和删除对象权限，不要使用主账号 AccessKey。脚本会额外安装经过校验的固定版本 rclone，隐藏输入 AccessKey Secret，执行 OSS 上传、下载比对和删除探针，并验证首份离机副本。随后还需在 OSS 控制台启用版本控制及至少 35 天生命周期。
+
+无论是否启用 OSS，都应尽快把 `/etc/vocaloid-producer-blog/backup.key` 的内容保存到服务器之外的受控密码库；脚本不会输出该密钥。没有外部保存的密钥时，整机丢失后本机备份和密钥会同时丢失。
+
+以下内容是脚本执行的完整手动步骤，主要用于审计和故障排查；使用一键脚本时不需要重复执行。
+
 安装系统工具并创建独立的无登录备份账户：
 
 ```bash
@@ -268,9 +285,10 @@ BACKUP_ENCRYPTION_KEY_FILE=/etc/vocaloid-producer-blog/backup.key
 BACKUP_RETENTION_DAYS=14
 BACKUP_REQUIRE_REPLICA=true
 BACKUP_REPLICA_COMMAND=/usr/bin/rclone
-BACKUP_REPLICA_ARGS=["copyto","{file}","utopia-backups:vocaloid-producer-blog/{name}"]
+BACKUP_REPLICA_ARGS='["copyto","{file}","utopia-backups:vocaloid-producer-blog/{name}"]'
 BACKUP_DRILL_LOG_DIR=/var/lib/vocaloid-producer-blog/drills
 BACKUP_TAR_COMMAND=/usr/bin/tar
+RCLONE_CONFIG=/var/lib/vpb-backup/.config/rclone/rclone.conf
 ```
 
 该配置必须保持 `root:root`、权限 `0600`。systemd 以 root 读取配置后，再以 `vpb-backup` 账户运行 root 所有的只读脚本，避免应用账户通过篡改工作区脚本或 `.env` 获取备份密钥与离机凭据。`BACKUP_REPLICA_ARGS` 由 Node 直接传给复制程序，不经过 Shell；必须包含 `{file}`，`{name}` 会替换为备份文件名。生产环境必须保持 `BACKUP_REQUIRE_REPLICA=true`，任何本地创建、加密、校验或离机复制失败都会写入 `security_alert`、返回非零状态并使 systemd 单元失败。
