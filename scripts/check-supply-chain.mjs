@@ -1,13 +1,12 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 
 const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 const lock = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'))
 const npmConfig = await readFile(new URL('../.npmrc', import.meta.url), 'utf8')
 const nodeVersion = (await readFile(new URL('../.nvmrc', import.meta.url), 'utf8')).trim()
-const workflows = await Promise.all([
-  readFile(new URL('../.github/workflows/security.yml', import.meta.url), 'utf8'),
-  readFile(new URL('../.github/workflows/codeql.yml', import.meta.url), 'utf8'),
-])
+const workflowRoot = new URL('../.github/workflows/', import.meta.url)
+const workflowNames = (await readdir(workflowRoot)).filter((name) => /\.ya?ml$/i.test(name)).sort()
+const workflows = await Promise.all(workflowNames.map((name) => readFile(new URL(name, workflowRoot), 'utf8')))
 const allowedLicenses = new Set([
   '0BSD',
   'Apache-2.0',

@@ -88,23 +88,13 @@ git rev-parse HEAD
 
 `git status --porcelain=v1` 必须没有输出。如果因为历史重写、分支分叉或本地修改导致 `--ff-only` 失败，应停止发布并使用新的发布目录重新克隆；不要在未备份生产数据时执行 `git reset --hard`。
 
-安装与验证：
+记录当前线上 `/build-info.json` 的完整提交 SHA，并执行统一的部署前门禁：
 
 ```bash
-npm ci
-npm run security:supply-chain
-npm audit --audit-level=high --registry=https://registry.npmjs.org
-npm run security:secrets
-npm run test:auth
-npm run test:uploads
-npm run test:public
-npm run test:content
-npm run test:monitoring
-npm run test:backup
-npm run test:deploy
-npm run verify:reproducible
-npm run verify:build
+CURRENT_DEPLOY_COMMIT=当前线上完整提交SHA npm run release:preflight
 ```
+
+门禁先以 `CURRENT_DEPLOY_COMMIT` 验证当前生产环境的 HTTPS、响应头、构建来源、缓存指标和公网端口隔离，再对候选提交执行 `npm ci`、供应链检查、依赖审计、敏感文件扫描、全部安全测试、可复现构建和产物来源验证。脚本使用 `set -e`，任一步失败都会立即返回非零；此时禁止重启生产服务。
 
 检查构建来源：
 
@@ -554,16 +544,13 @@ curl --max-time 5 http://utopiap.top:8787/api/health
 
 ## 10. 发布后验收
 
+重启服务后，使用本次候选提交执行只读发布门禁：
+
 ```bash
-curl -sSI http://utopiap.top/
-curl -sSI http://www.utopiap.top/
-curl -sS -D - -o /dev/null https://utopiap.top/
-curl -sS -D - -o /dev/null https://utopiap.top/admin
-curl -sS https://utopiap.top/api/health
-curl -sS https://utopiap.top/build-info.json
-curl -sS https://utopiap.top/api/bilibili/cache-stats
-curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
+DEPLOY_COMMIT=$(git rev-parse HEAD) npm run release:verify
 ```
+
+该命令只访问公开只读接口，不读取生产 `.env`，不携带任何管理凭据，也不执行登录、上传、下载或内容写入。它会自动完成下列可机器验证的项目，任一失败都会返回非零。本次发布只有在命令成功后才算完成；失败时立即进入第 11 节回滚流程。
 
 验收要求：
 
@@ -576,6 +563,8 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 - 同步响应包含 `X-Feed-Cache`，图片响应包含 `X-Image-Cache`。
 - 首页、文章、视频封面、动态、管理登录、Markdown 预览、上传和下载功能正常。
 - 浏览器控制台没有 CSP 违规或脚本错误。
+
+前六项由自动化冒烟门禁覆盖；缓存响应头以及依赖真实页面交互的功能和控制台状态仍由维护者在浏览器中检查。也可以在 GitHub Actions 中手动运行 `Production smoke`，填写生产实际部署的完整提交 SHA；该 workflow 同样不使用生产凭据或执行写操作，并保存独立验收结果。
 
 ## 11. 回滚
 
@@ -600,5 +589,6 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 - [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
 - [x] 3.9 采用 journald 本地留存方案；确认生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL`，不启用主动外发。
 - [x] 3.10 已按本机加密备份方案通过生产验收：首份备份、完整性校验和首次真实恢复演练均完成；暂不配置离机副本的风险已记录并接受。
+- [ ] 3.11 自动化测试、只读生产冒烟和发布门禁已完成实现；待首次真实发布同时通过 `release:preflight` 与 `release:verify` 后完成生产验收。
 
 PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。

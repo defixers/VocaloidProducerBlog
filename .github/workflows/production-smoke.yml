@@ -1,0 +1,36 @@
+name: Production smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_commit:
+        description: Full 40-character commit deployed to production
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-smoke
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.deploy_commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: node scripts/smoke-production.mjs
+        env:
+          DEPLOY_COMMIT: ${{ inputs.deploy_commit }}
+          SMOKE_BASE_URL: https://utopiap.top
+          SMOKE_WWW_URL: https://www.utopiap.top

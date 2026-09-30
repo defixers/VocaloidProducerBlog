@@ -16,14 +16,14 @@ if (!bash) {
   process.exit(1)
 }
 
-const result = spawnSync(bash, ['-n', 'deploy/setup-alinux3-backup.sh'], {
-  cwd: new URL('..', import.meta.url),
-  stdio: 'inherit',
-})
-
-if (result.error) {
-  console.error(`Unable to run Bash: ${result.error.message}`)
-  process.exit(1)
+for (const script of ['deploy/setup-alinux3-backup.sh', 'deploy/release-gate-alinux3.sh']) {
+  const result = spawnSync(bash, ['-n', script], {
+    cwd: new URL('..', import.meta.url),
+    stdio: 'inherit',
+  })
+  if (result.error) {
+    console.error(`Unable to run Bash: ${result.error.message}`)
+    process.exit(1)
+  }
+  if (result.status !== 0) process.exit(result.status ?? 1)
 }
-
-process.exit(result.status ?? 1)

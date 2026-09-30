@@ -4,7 +4,7 @@
 
 ## 当前安全状态
 
-截至 2026-09-28，安全路线图 3.1 至 3.8 已全部完成并通过生产验收。生产环境运行可追溯的干净构建，HTTPS、安全响应头、后台认证、上传下载、Bilibili 代理、内容验证和供应链检查均已验证。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+截至 2026-09-30，安全路线图 3.1 至 3.10 已完成生产验收，3.11 的自动化安全测试与只读发布门禁已完成实现，等待首次真实发布验收。生产环境运行可追溯的干净构建，HTTPS、安全响应头、后台认证、上传下载、Bilibili 代理、内容验证、备份恢复和供应链检查均已验证。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
 本次验收对应提交为 `6137eed8847666683fa58f605eb83ad329c0b74d`。线上 `/build-info.json` 与该提交一致且 `dirty: false`；后续发布仍必须重新执行完整门禁，不能沿用本次结果。
 
@@ -359,24 +359,19 @@ curl -i https://你的域名/api/health
 
 ### 生产发布门禁
 
-每次生产发布至少完成以下检查：
+Alibaba Cloud Linux 3 上每次生产发布必须先读取当前线上 `/build-info.json` 的完整提交 SHA，然后执行统一门禁：
 
 ```bash
-git status --porcelain=v1
-git rev-parse HEAD
-npm ci
-npm run security:supply-chain
-npm audit --audit-level=high --registry=https://registry.npmjs.org
-npm run security:secrets
-npm run test:auth
-npm run test:uploads
-npm run test:public
-npm run test:content
-npm run verify:reproducible
-npm run verify:build
+CURRENT_DEPLOY_COMMIT=当前线上完整提交SHA npm run release:preflight
 ```
 
-第一条命令必须没有输出。服务重启后还要检查 `/build-info.json` 的 `commit` 与部署提交一致且 `dirty` 为 `false`，并验证 `/api/health`、`/api/bilibili/cache-stats`、后台登录和一次只读内容加载。不得从包含生产数据修改的 Git 工作区直接构建。
+门禁会拒绝脏工作区，先对当前生产边界执行只读冒烟检查，再运行依赖审计、敏感文件扫描、全部安全测试、双构建和构建来源验证。只有命令返回 `0` 才能重启服务。部署后执行：
+
+```bash
+DEPLOY_COMMIT=$(git rev-parse HEAD) npm run release:verify
+```
+
+发布后门禁只访问公开只读接口，不携带管理密码、Cookie、CSRF Token 或 Bilibili Cookie，也不执行登录、上传和内容写入。它会验证 HTTPS、响应头、线上构建提交、缓存指标和公网 `8787` 隔离；失败时本次发布不算完成，必须按生产手册回滚。
 
 ## 验证命令
 
@@ -387,6 +382,10 @@ npm run test:auth      # 后台认证与限流集成测试
 npm run test:uploads   # 上传、扫描、下载与删除安全集成测试
 npm run test:public    # SSRF、重定向、响应上限和超时安全测试
 npm run test:content   # 内容 Schema、版本冲突与 Markdown XSS 测试
+npm run test:monitoring # 安全日志、告警阈值和敏感字段测试
+npm run test:backup     # 加密备份、完整性校验和恢复测试
+npm run test:smoke      # 生产冒烟检查器的成功与拒绝路径测试
+npm run smoke:production # 对生产公开边界执行只读冒烟检查，必须设置 DEPLOY_COMMIT
 npm run security:supply-chain # 精确版本、锁文件、许可证、弃用和来源检查
 npm run verify:reproducible   # 双构建文件哈希一致性检查
 npm run verify:build          # 构建产物 Git SHA 与工作区状态检查
