@@ -24,7 +24,7 @@ try {
   await writeFile(envFile, 'ADMIN_PASSWORD_HASH=encrypted-inside-backup\n')
   const key = readBackupKey(crypto.randomBytes(32).toString('hex'))
   const replicaScript = new URL('./fixtures/copy-backup.mjs', import.meta.url).pathname.replace(/^\/(.:\/)/, '$1')
-  await mkdir(backupDir, { recursive: true })
+  await mkdir(backupDir, { recursive: true, mode: 0o700 })
   const expiredBackup = join(backupDir, 'vpb-backup-20260801T000000Z-deadbeef.vpb')
   await writeFile(expiredBackup, 'expired')
   await writeFile(`${expiredBackup}.sha256`, 'expired')
