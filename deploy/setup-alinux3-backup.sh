@@ -12,6 +12,7 @@ readonly DEFAULT_STORAGE_ROOT="/var/lib/vocaloid-producer-blog"
 readonly RCLONE_VERSION_DEFAULT="v1.70.3"
 
 TEMP_DIR=""
+NODE_BIN=""
 cleanup() {
   if [[ -n "${TEMP_DIR}" && -d "${TEMP_DIR}" ]]; then
     rm -rf -- "${TEMP_DIR}"
@@ -125,7 +126,7 @@ collect_configuration() {
     [[ "${ALIYUN_OSS_ACCESS_KEY_ID}" != *$'\n'* && "${ALIYUN_OSS_ACCESS_KEY_SECRET}" != *$'\n'* ]] || fail "AccessKey contains an invalid newline"
   fi
   [[ "${RCLONE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid RCLONE_VERSION"
-  [[ -f "${APP_ROOT}/package.json" && -f "${APP_ROOT}/scripts/lib/backup.mjs" ]] || fail "APP_ROOT is not a compatible project checkout"
+  [[ -f "${APP_ROOT}/package.json" && -f "${APP_ROOT}/.nvmrc" && -f "${APP_ROOT}/scripts/lib/backup.mjs" ]] || fail "APP_ROOT is not a compatible project checkout"
   [[ -f "${APP_ROOT}/.env" ]] || fail "Application .env is missing: ${APP_ROOT}/.env"
   [[ -f "${STORAGE_ROOT}/data/content.json" ]] \
     || fail "Storage root is incomplete: missing ${STORAGE_ROOT}/data/content.json"
@@ -135,12 +136,58 @@ collect_configuration() {
 
 install_packages() {
   log "Installing operating system dependencies"
-  dnf install -y acl ca-certificates openssl tar util-linux
+  dnf install -y acl ca-certificates curl openssl tar util-linux xz
   if [[ "${ENABLE_OFFSITE_BACKUP}" == "yes" ]]; then
-    dnf install -y curl unzip
+    dnf install -y unzip
   fi
-  command -v node >/dev/null 2>&1 || fail "Node.js 24.21.x must be installed before running this script"
-  [[ "$(node -p 'process.versions.node')" == 24.21.* ]] || fail "Node.js 24.21.x is required"
+}
+
+install_node() {
+  local required_version
+  required_version="$(tr -d '\r\n' < "${APP_ROOT}/.nvmrc")"
+  [[ "${required_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "The project .nvmrc does not contain an exact Node.js version"
+
+  if command -v node >/dev/null 2>&1 \
+    && [[ "$(node -p 'process.versions.node')" == "${required_version}" ]]; then
+    NODE_BIN="$(readlink -f -- "$(command -v node)")"
+    log "Using existing Node.js ${required_version}: ${NODE_BIN}"
+    return
+  fi
+
+  local architecture
+  case "$(uname -m)" in
+    x86_64) architecture="x64" ;;
+    aarch64) architecture="arm64" ;;
+    *) fail "Unsupported CPU architecture: $(uname -m)" ;;
+  esac
+
+  local version="v${required_version}"
+  local archive="node-${version}-linux-${architecture}.tar.xz"
+  local base_url="https://nodejs.org/dist/${version}"
+  local install_root="/opt/vocaloid-producer-blog-node-${version}-${architecture}"
+  if [[ -x "${install_root}/bin/node" ]]; then
+    [[ "$("${install_root}/bin/node" -p 'process.versions.node')" == "${required_version}" ]] \
+      || fail "Existing private Node.js runtime has an unexpected version: ${install_root}"
+    NODE_BIN="${install_root}/bin/node"
+    log "Using private Node.js ${required_version}: ${NODE_BIN}"
+    return
+  fi
+  [[ ! -e "${install_root}" ]] || fail "Incomplete private Node.js runtime exists: ${install_root}"
+
+  log "Downloading the Node.js ${required_version} runtime required by the project"
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    --output "${TEMP_DIR}/${archive}" "${base_url}/${archive}"
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    --output "${TEMP_DIR}/NODE-SHASUMS256.txt" "${base_url}/SHASUMS256.txt"
+  grep -E "  ${archive}$" "${TEMP_DIR}/NODE-SHASUMS256.txt" > "${TEMP_DIR}/NODE-CHECKSUM" \
+    || fail "The Node.js checksum entry is missing"
+  (cd "${TEMP_DIR}" && sha256sum --check NODE-CHECKSUM)
+  tar -xJf "${TEMP_DIR}/${archive}" -C "${TEMP_DIR}"
+  mv -- "${TEMP_DIR}/node-${version}-linux-${architecture}" "${install_root}"
+  chown -R root:root "${install_root}"
+  NODE_BIN="${install_root}/bin/node"
+  [[ "$("${NODE_BIN}" -p 'process.versions.node')" == "${required_version}" ]] \
+    || fail "The installed private Node.js runtime failed verification"
 }
 
 install_rclone() {
@@ -278,10 +325,8 @@ EOF
 install_systemd_units() {
   log "Installing and validating systemd units"
   install -o root -g root -m 0644 "${APP_ROOT}"/deploy/systemd/vocaloid-producer-blog-{backup,restore-drill}.{service,timer} /etc/systemd/system/
-  local node_bin
-  node_bin="$(readlink -f -- "$(command -v node)")"
-  [[ -x "${node_bin}" ]] || fail "Node.js is not installed"
-  sed -i "s#/usr/bin/node#${node_bin}#g" \
+  [[ -x "${NODE_BIN}" ]] || fail "The private Node.js runtime is not available"
+  sed -i "s#/usr/bin/node#${NODE_BIN}#g" \
     /etc/systemd/system/vocaloid-producer-blog-backup.service \
     /etc/systemd/system/vocaloid-producer-blog-restore-drill.service
   systemd-analyze verify \
@@ -348,6 +393,7 @@ main() {
   TEMP_DIR="$(mktemp -d)"
   collect_configuration
   install_packages
+  install_node
   create_backup_account
   grant_read_access
   create_encryption_key
