@@ -281,7 +281,7 @@ onMounted(async () => {
       <div class="footer-brand"><span class="brand-mark"><Zap :size="16" fill="currentColor" /></span><strong>UTOPIA_乌托邦P</strong></div>
       <p>至少我还在为你而歌唱。</p>
       <div><button @click="go('articles')">文章</button><button @click="go('videos')">视频</button><button @click="go('assets')">素材</button><a href="mailto:2811077500@qq.com">合作联系</a></div>
-      <small>© 2026 UTOPIA_P. UNOFFICIAL SITE TEMPLATE.</small>
+      <small>© 2026 UTOPIA_P. OFFICIAL WEBSITE.</small>
     </footer>
 
     <div v-if="searchOpen" class="search-modal" @click.self="searchOpen = false">
