@@ -1,0 +1,11 @@
+[Unit]
+Description=Run monthly Vocaloid Producer Blog restore drill
+
+[Timer]
+OnCalendar=*-*-01 03:30:00
+Persistent=true
+RandomizedDelaySec=30m
+Unit=vocaloid-producer-blog-restore-drill.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Vocaloid Producer Blog backup every 12 hours
+
+[Timer]
+OnCalendar=*-*-* 00,12:15:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=vocaloid-producer-blog-backup.service
+
+[Install]
+WantedBy=timers.target

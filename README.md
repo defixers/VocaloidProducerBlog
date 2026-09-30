@@ -107,6 +107,8 @@ SECURITY_ALERT_TIMEOUT_SECONDS=5
 PORT=8787
 ```
 
+下表中的 `BACKUP_*` 变量属于独立的 root 所有 `/etc/vocaloid-producer-blog/backup.env`，不要写入应用 `.env`。模板见 [backup.env.example](deploy/backup.env.example)。
+
 | 变量 | 说明 |
 | --- | --- |
 | `ADMIN_PASSWORD_HASH` | 管理密码的 Argon2id 哈希；生产环境必须设置，不能填写明文密码 |
@@ -153,6 +155,15 @@ PORT=8787
 | `SECURITY_ALERT_WEBHOOK_URL` | 当前生产服务器明确不配置，保持为空；应用只将告警写入 journald |
 | `SECURITY_ALERT_WEBHOOK_HOSTS` | 当前生产服务器保持为空；仅在未来启用 Webhook 时填写精确域名白名单 |
 | `SECURITY_ALERT_TIMEOUT_SECONDS` | Webhook 请求超时，默认 5 秒 |
+| `BACKUP_APP_ROOT` | 应用工作区路径；仅写入独立的 root 所有 `backup.env` |
+| `BACKUP_LOCAL_DIR` | 加密备份的本地暂存目录，必须位于 `APP_STORAGE_ROOT` 之外 |
+| `BACKUP_ENCRYPTION_KEY_FILE` | 32 字节备份密钥文件；只允许备份账户读取，不能放入仓库、`.env` 或备份包 |
+| `BACKUP_RETENTION_DAYS` | 本地加密备份保留天数，默认 14 天且始终保留最新一份 |
+| `BACKUP_REQUIRE_REPLICA` | 是否强制离机复制成功才判定备份成功；生产环境必须为 `true` |
+| `BACKUP_REPLICA_COMMAND` | 离机复制程序的绝对路径，生产示例使用 `/usr/bin/rclone` |
+| `BACKUP_REPLICA_ARGS` | 离机复制参数 JSON 数组，必须包含 `{file}`，可使用 `{name}` |
+| `BACKUP_DRILL_LOG_DIR` | 月度恢复演练记录目录 |
+| `BACKUP_TAR_COMMAND` | tar 程序路径，生产环境使用 `/usr/bin/tar` |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
 | `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
@@ -188,6 +199,10 @@ npm run security:hash-password
 后台登录按 IP 和管理账户分别限流，连续失败会触发指数退避，同时限制 Argon2id 验证并发数。管理写接口按会话限制请求频率和并发数，JSON 请求体上限为 512 KB。安全日志使用单行 JSON，记录请求 ID、来源 IP 的 HMAC 标识、事件和结果，不记录密码、Cookie、CSRF Token、Authorization Header、文章标题或正文。日志覆盖登录、会话吊销、文章增删改和资源上传删除；暴力登录、异常上传、持续 `5xx`、Bilibili 代理失败和低磁盘空间会触发带冷却时间的告警。
 
 当前生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL` 和 `SECURITY_ALERT_WEBHOOK_HOSTS`。告警以 `security_alert` JSON 写入标准错误并由 journald 保存，不进行 Webhook 外发；维护者需要按部署文档定期检查日志。代码保留可选 Webhook 能力，但不属于当前生产部署方案。生产日志的采集、权限和保留策略见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+
+## 备份与恢复
+
+`npm run backup:create` 会备份文章数据、上传资源和服务端 `.env`，使用 AES-256-GCM 认证加密并生成 SHA-256 校验文件。生产环境必须将加密文件和校验文件复制到离机存储，否则命令失败。生产备份配置使用 [backup.env.example](deploy/backup.env.example) 单独部署，不能由应用账户修改。`npm run backup:restore` 只允许恢复到空目录且拒绝覆盖现有环境文件；`npm run backup:drill` 在临时目录执行完整恢复、逐文件校验和资源一致性检查，并保存演练记录。定时任务、密钥隔离、离机存储和恢复步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
 仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
 

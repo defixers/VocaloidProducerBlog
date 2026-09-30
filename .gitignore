@@ -2,5 +2,6 @@ node_modules/
 dist/
 .env
 .screenshots/
+.backups/
 server/uploads/*
 !server/uploads/.gitkeep

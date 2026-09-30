@@ -1,0 +1,23 @@
+[Unit]
+Description=Encrypted off-site backup for Vocaloid Producer Blog
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=2h
+User=vpb-backup
+Group=vpb-backup
+WorkingDirectory=/opt/vocaloid-producer-blog-backup
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/vocaloid-producer-blog/backup.env
+ExecStart=/usr/bin/node /opt/vocaloid-producer-blog-backup/scripts/backup-data.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/backups/vocaloid-producer-blog /var/lib/vpb-backup
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

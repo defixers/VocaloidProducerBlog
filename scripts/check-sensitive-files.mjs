@@ -5,7 +5,7 @@ const staged = process.argv.includes('--staged')
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' })
 const output = staged
   ? git('diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z')
-  : git('ls-files', '-z')
+  : git('ls-files', '--cached', '--others', '--exclude-standard', '-z')
 const files = output.split('\0').filter(Boolean)
 
 const forbiddenPaths = [
@@ -14,6 +14,7 @@ const forbiddenPaths = [
   { name: 'browser or audit output', pattern: /(^|\/)\.screenshots?\//i },
   { name: 'uploaded file', pattern: /(^|\/)server\/uploads\/(?!\.gitkeep$)/i },
   { name: 'private key or certificate bundle', pattern: /\.(?:key|pem|p12|pfx)$/i },
+  { name: 'encrypted application backup', pattern: /\.vpb$/i },
   { name: 'browser or application database', pattern: /(^|\/)(?:Cookies|Login Data|History|Web Data|[^/]+\.(?:sqlite|sqlite3|db))$/i },
 ]
 

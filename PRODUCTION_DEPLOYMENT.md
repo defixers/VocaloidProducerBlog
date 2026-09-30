@@ -21,6 +21,9 @@
 /var/lib/vocaloid-producer-blog/        持久化数据根目录
   data/content.json
   uploads/
+/var/backups/vocaloid-producer-blog/    本地加密备份暂存目录
+/opt/vocaloid-producer-blog-backup/     root 所有的只读备份程序
+/etc/vocaloid-producer-blog/            备份配置与加密密钥
 /etc/nginx/sites-available/utopiap.top   Nginx 站点配置
 /etc/nginx/snippets/utopia-security.conf
 ```
@@ -97,6 +100,7 @@ npm run test:uploads
 npm run test:public
 npm run test:content
 npm run test:monitoring
+npm run test:backup
 npm run verify:reproducible
 npm run verify:build
 ```
@@ -198,6 +202,149 @@ sudo journalctl -u vocaloid-producer-blog --since '5 minutes ago' -o cat \
 ```
 
 这意味着服务器具备检测和留存能力，但没有主动送达能力。若未来改变该部署决策，必须重新完成 Webhook 主机白名单、SSRF 防护和真实送达验收，不能直接填写未经审核的地址。
+
+### 5.2 加密备份、离机副本与恢复演练
+
+目标为 RPO 不超过 24 小时、RTO 不超过 2 小时。备份定时器每 12 小时运行一次。备份采用在线一致性快照：复制前后比较 `content.json`，检测到管理写入或资源变化时自动重试，并在加密前验证资源引用，因此不会中断网站服务。备份内容包括 `data/`、`uploads/` 和生产 `.env`，密钥与副本权限必须按敏感凭据管理。
+
+安装系统工具并创建独立的无登录备份账户：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y acl rclone tar
+sudo useradd --system --home-dir /var/lib/vpb-backup --create-home \
+  --shell /usr/sbin/nologin vpb-backup
+sudo install -d -o vpb-backup -g vpb-backup -m 0700 /var/backups/vocaloid-producer-blog
+sudo install -d -o vpb-backup -g vpb-backup -m 0700 /var/lib/vocaloid-producer-blog/drills
+```
+
+为备份账户授予生产数据和 `.env` 的只读权限。默认 ACL 确保以后新建的上传文件仍可被备份账户读取：
+
+```bash
+sudo setfacl -m u:vpb-backup:x /home/admin
+sudo setfacl -m u:vpb-backup:rx /var/lib/vocaloid-producer-blog
+sudo setfacl -R -m u:vpb-backup:rX /var/lib/vocaloid-producer-blog/data /var/lib/vocaloid-producer-blog/uploads
+sudo find /var/lib/vocaloid-producer-blog/data /var/lib/vocaloid-producer-blog/uploads \
+  -type d -exec setfacl -m d:u:vpb-backup:rX {} \;
+sudo setfacl -m u:vpb-backup:r /home/admin/VocaloidProducerBlog/.env
+```
+
+生成独立的 32 字节备份密钥。密钥不能写入 `.env`、Git、备份目录或 rclone 远端；必须另存一份到受控的离线密码库，否则服务器完全损坏后无法解密备份：
+
+```bash
+sudo install -d -o root -g vpb-backup -m 0750 /etc/vocaloid-producer-blog
+openssl rand -hex 32 | sudo tee /etc/vocaloid-producer-blog/backup.key >/dev/null
+sudo chown vpb-backup:vpb-backup /etc/vocaloid-producer-blog/backup.key
+sudo chmod 0600 /etc/vocaloid-producer-blog/backup.key
+```
+
+使用独立的对象存储账户配置 rclone。该账户只授予目标桶所需的最小权限，并在存储端启用版本控制和至少 35 天生命周期；离机存储不能是生产服务器上的另一个普通目录或磁盘分区：
+
+```bash
+sudo -u vpb-backup -H rclone config
+sudo -u vpb-backup -H rclone lsd utopia-backups:
+```
+
+不要把备份命令、密钥路径和离机目标放入应用账户可写的 `.env`。将脚本安装到 root 所有的只读目录，并从模板创建独立配置：
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/vocaloid-producer-blog-backup/scripts/lib
+sudo install -o root -g root -m 0644 scripts/lib/backup.mjs \
+  /opt/vocaloid-producer-blog-backup/scripts/lib/backup.mjs
+sudo install -o root -g root -m 0644 scripts/backup-data.mjs scripts/restore-backup.mjs scripts/restore-drill.mjs \
+  /opt/vocaloid-producer-blog-backup/scripts/
+sudo install -o root -g root -m 0600 deploy/backup.env.example \
+  /etc/vocaloid-producer-blog/backup.env
+sudoedit /etc/vocaloid-producer-blog/backup.env
+```
+
+`/etc/vocaloid-producer-blog/backup.env` 内容为：
+
+```dotenv
+BACKUP_APP_ROOT=/home/admin/VocaloidProducerBlog
+APP_STORAGE_ROOT=/var/lib/vocaloid-producer-blog
+BACKUP_LOCAL_DIR=/var/backups/vocaloid-producer-blog
+BACKUP_ENCRYPTION_KEY_FILE=/etc/vocaloid-producer-blog/backup.key
+BACKUP_RETENTION_DAYS=14
+BACKUP_REQUIRE_REPLICA=true
+BACKUP_REPLICA_COMMAND=/usr/bin/rclone
+BACKUP_REPLICA_ARGS=["copyto","{file}","utopia-backups:vocaloid-producer-blog/{name}"]
+BACKUP_DRILL_LOG_DIR=/var/lib/vocaloid-producer-blog/drills
+BACKUP_TAR_COMMAND=/usr/bin/tar
+```
+
+该配置必须保持 `root:root`、权限 `0600`。systemd 以 root 读取配置后，再以 `vpb-backup` 账户运行 root 所有的只读脚本，避免应用账户通过篡改工作区脚本或 `.env` 获取备份密钥与离机凭据。`BACKUP_REPLICA_ARGS` 由 Node 直接传给复制程序，不经过 Shell；必须包含 `{file}`，`{name}` 会替换为备份文件名。生产环境必须保持 `BACKUP_REQUIRE_REPLICA=true`，任何本地创建、加密、校验或离机复制失败都会写入 `security_alert`、返回非零状态并使 systemd 单元失败。
+
+安装并检查定时单元：
+
+```bash
+sudo install -m 0644 deploy/systemd/vocaloid-producer-blog-backup.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/vocaloid-producer-blog-backup.timer /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/vocaloid-producer-blog-restore-drill.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/vocaloid-producer-blog-restore-drill.timer /etc/systemd/system/
+sudo systemd-analyze verify /etc/systemd/system/vocaloid-producer-blog-{backup,restore-drill}.{service,timer}
+sudo systemctl daemon-reload
+```
+
+每次发布涉及 `scripts/lib/backup.mjs`、三个备份命令或 systemd 单元时，都必须重复上述 `install`、`systemd-analyze verify` 和 `daemon-reload`，确保生产任务执行的是本次经过审核的 root 所有副本，而不是 Git 工作区文件。
+
+首次备份必须手动执行并验收，同时确认应用始终正常运行：
+
+```bash
+sudo systemctl start vocaloid-producer-blog-backup.service
+sudo systemctl status vocaloid-producer-blog-backup.service
+sudo systemctl is-active vocaloid-producer-blog.service
+sudo journalctl -u vocaloid-producer-blog-backup.service -n 100 --no-pager
+sudo -u vpb-backup bash -c 'cd /var/backups/vocaloid-producer-blog && sha256sum -c -- *.vpb.sha256'
+sudo -u vpb-backup -H rclone lsf utopia-backups:vocaloid-producer-blog/
+```
+
+确认本地 `.vpb` 和 `.sha256` 均存在、校验成功且远端出现同名文件后，启用每 12 小时备份和每月恢复演练：
+
+```bash
+sudo systemctl enable --now vocaloid-producer-blog-backup.timer
+sudo systemctl enable --now vocaloid-producer-blog-restore-drill.timer
+systemctl list-timers 'vocaloid-producer-blog-*'
+```
+
+首次恢复演练也必须手动执行。演练只写入临时空目录，不会覆盖生产数据；成功记录保存在 `BACKUP_DRILL_LOG_DIR`：
+
+```bash
+sudo systemctl start vocaloid-producer-blog-restore-drill.service
+sudo systemctl status vocaloid-producer-blog-restore-drill.service
+sudo journalctl -u vocaloid-producer-blog-restore-drill.service -n 100 --no-pager
+sudo ls -l /var/lib/vocaloid-producer-blog/drills/
+sudo cat /var/lib/vocaloid-producer-blog/drills/restore-drill-*.json
+```
+
+记录必须包含 `startedAt`、`finishedAt`、`durationSeconds`、`outcome: succeeded`、校验文件数、内容版本和空的 `issues`。每月复查最后一条记录，确认演练间隔未超过一个月且耗时小于 7200 秒。
+
+#### 从空环境恢复
+
+恢复前从离机存储取回同名 `.vpb` 和 `.sha256` 文件，并从离线密码库恢复密钥。恢复命令拒绝非空目标目录和已存在的环境文件，不会原地覆盖生产数据：
+
+```bash
+sudo systemctl stop vocaloid-producer-blog.service
+sudo install -d -o vpb-backup -g vpb-backup -m 0700 /var/lib/vocaloid-producer-blog-restore
+sudo install -d -o vpb-backup -g vpb-backup -m 0700 /var/lib/vocaloid-config-restore
+sudo -u vpb-backup -H env \
+  BACKUP_APP_ROOT=/home/admin/VocaloidProducerBlog \
+  BACKUP_ENCRYPTION_KEY_FILE=/etc/vocaloid-producer-blog/backup.key \
+  BACKUP_TAR_COMMAND=/usr/bin/tar \
+  /usr/bin/node /opt/vocaloid-producer-blog-backup/scripts/restore-backup.mjs \
+  --backup /var/backups/vocaloid-producer-blog/备份文件.vpb \
+  --target /var/lib/vocaloid-producer-blog-restore \
+  --env-output /var/lib/vocaloid-config-restore/.env
+```
+
+成功后检查恢复日志、`data/content.json`、资源数量和 `.env`，再由维护者在保留旧目录作为回滚副本的前提下切换目录。切换后将数据所有者改回 `admin:admin`、`.env` 权限改为 `0600`，启动应用并执行本文第 10 节全部发布后验收。不得在未验证恢复结果时删除旧生产数据。
+
+备份或演练失败时检查：
+
+```bash
+sudo journalctl --since '24 hours ago' -o cat \
+  | grep -E 'backup_(create|restore|restore_drill)|"level":"security_alert"'
+```
 
 仅从服务器本机验证 Express：
 
@@ -426,7 +573,7 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 
 ## 12. 验收状态与后续待办
 
-截至 2026-09-28：
+截至 2026-09-30：
 
 - [x] 3.5 HTTPS、安全响应头、强制 CSP、管理页禁用缓存和公网端口隔离已通过生产检查。
 - [x] 3.6 Bilibili 代理、缓存指标、危险目标拒绝和资源限制已通过生产检查。
@@ -434,6 +581,6 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 - [x] 3.8 生产构建可追溯到 `6137eed8847666683fa58f605eb83ad329c0b74d`，且 `dirty: false`。
 - [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
 - [x] 3.9 采用 journald 本地留存方案；确认生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL`，不启用主动外发。
-- [ ] 为生产数据建立自动备份、校验和与恢复演练。
+- [ ] 3.10 实现和自动化测试已完成；待配置生产离机存储、生成首份备份并完成首次真实恢复演练。
 
 PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。
