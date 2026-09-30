@@ -6,6 +6,7 @@ readonly BACKUP_USER="vpb-backup"
 readonly INSTALL_ROOT="/opt/vocaloid-producer-blog-backup"
 readonly CONFIG_ROOT="/etc/vocaloid-producer-blog"
 readonly BACKUP_ROOT="/var/backups/vocaloid-producer-blog"
+readonly DRILL_LOG_ROOT="/var/lib/vocaloid-producer-blog/drills"
 readonly RCLONE_HOME="/var/lib/vpb-backup"
 readonly RCLONE_CONFIG="${RCLONE_HOME}/.config/rclone/rclone.conf"
 readonly DEFAULT_STORAGE_ROOT="/var/lib/vocaloid-producer-blog"
@@ -220,7 +221,7 @@ create_backup_account() {
     useradd --system --home-dir "${RCLONE_HOME}" --create-home --shell /usr/sbin/nologin "${BACKUP_USER}"
   fi
   install -d -o "${BACKUP_USER}" -g "${BACKUP_USER}" -m 0700 "${BACKUP_ROOT}"
-  install -d -o "${BACKUP_USER}" -g "${BACKUP_USER}" -m 0700 "${STORAGE_ROOT}/drills"
+  install -d -o "${BACKUP_USER}" -g "${BACKUP_USER}" -m 0700 "${DRILL_LOG_ROOT}"
   install -d -o "${BACKUP_USER}" -g "${BACKUP_USER}" -m 0700 "$(dirname "${RCLONE_CONFIG}")"
 }
 
@@ -303,7 +304,7 @@ APP_STORAGE_ROOT=${STORAGE_ROOT}
 BACKUP_LOCAL_DIR=${BACKUP_ROOT}
 BACKUP_ENCRYPTION_KEY_FILE=${CONFIG_ROOT}/backup.key
 BACKUP_RETENTION_DAYS=14
-BACKUP_DRILL_LOG_DIR=${STORAGE_ROOT}/drills
+BACKUP_DRILL_LOG_DIR=${DRILL_LOG_ROOT}
 BACKUP_TAR_COMMAND=/usr/bin/tar
 EOF
   if [[ "${ENABLE_OFFSITE_BACKUP}" == "yes" ]]; then
@@ -337,11 +338,20 @@ install_systemd_units() {
   systemctl daemon-reload
 }
 
+start_service_or_fail() {
+  local unit="$1"
+  local description="$2"
+  if systemctl start "${unit}"; then
+    return
+  fi
+  systemctl status "${unit}" --no-pager -l >&2 || true
+  journalctl -u "${unit}" -n 40 --no-pager -o cat >&2 || true
+  fail "${description} failed; review the service log printed above"
+}
+
 run_acceptance_checks() {
   log "Creating and replicating the first encrypted backup"
-  systemctl start vocaloid-producer-blog-backup.service
-  systemctl --quiet is-failed vocaloid-producer-blog-backup.service \
-    && fail "The first backup failed; inspect journalctl -u vocaloid-producer-blog-backup.service"
+  start_service_or_fail vocaloid-producer-blog-backup.service "The first backup"
   runuser -u "${BACKUP_USER}" -- bash -c \
     "cd '${BACKUP_ROOT}' && sha256sum -c -- *.vpb.sha256"
   if [[ "${ENABLE_OFFSITE_BACKUP}" == "yes" ]]; then
@@ -352,10 +362,8 @@ run_acceptance_checks() {
   fi
 
   log "Running the first full restore drill"
-  systemctl start vocaloid-producer-blog-restore-drill.service
-  systemctl --quiet is-failed vocaloid-producer-blog-restore-drill.service \
-    && fail "The restore drill failed; inspect journalctl -u vocaloid-producer-blog-restore-drill.service"
-  grep -q '"outcome": "succeeded"' "${STORAGE_ROOT}"/drills/restore-drill-*.json \
+  start_service_or_fail vocaloid-producer-blog-restore-drill.service "The restore drill"
+  grep -q '"outcome": "succeeded"' "${DRILL_LOG_ROOT}"/restore-drill-*.json \
     || fail "A successful restore drill record was not created"
 
   systemctl enable --now vocaloid-producer-blog-backup.timer
@@ -372,7 +380,7 @@ print_summary() {
     echo "Off-site copy: disabled"
     echo "WARNING: Local backups cannot survive total server loss or server compromise."
   fi
-  echo "Drill records: ${STORAGE_ROOT}/drills"
+  echo "Drill records: ${DRILL_LOG_ROOT}"
   echo "Timers:"
   systemctl list-timers 'vocaloid-producer-blog-*' --no-pager
   echo
