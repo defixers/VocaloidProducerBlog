@@ -81,7 +81,25 @@ collect_configuration() {
   RCLONE_VERSION="${RCLONE_VERSION:-${RCLONE_VERSION_DEFAULT}}"
 
   prompt_value APP_ROOT "Application repository path" "/home/admin/VocaloidProducerBlog"
-  prompt_value STORAGE_ROOT "Application storage root" "${DEFAULT_STORAGE_ROOT}"
+  local storage_default="${DEFAULT_STORAGE_ROOT}"
+  local configured_storage=""
+  if [[ -f "${APP_ROOT}/.env" ]]; then
+    configured_storage="$(sed -n 's/^[[:space:]]*APP_STORAGE_ROOT[[:space:]]*=[[:space:]]*//p' "${APP_ROOT}/.env" | tail -n 1)"
+    configured_storage="${configured_storage%$'\r'}"
+    if [[ "${configured_storage}" =~ ^\".*\"$ || "${configured_storage}" =~ ^\'.*\'$ ]]; then
+      configured_storage="${configured_storage:1:${#configured_storage}-2}"
+    fi
+  fi
+  if [[ -n "${configured_storage}" ]]; then
+    if [[ "${configured_storage}" == /* ]]; then
+      storage_default="${configured_storage}"
+    else
+      storage_default="${APP_ROOT}/${configured_storage}"
+    fi
+  elif [[ -f "${APP_ROOT}/server/data/content.json" && -d "${APP_ROOT}/server/uploads" ]]; then
+    storage_default="${APP_ROOT}/server"
+  fi
+  prompt_value STORAGE_ROOT "Application storage root" "${storage_default}"
   prompt_value ENABLE_OFFSITE_BACKUP "Enable Alibaba Cloud OSS off-site replication now? (yes/no)" "no"
   ENABLE_OFFSITE_BACKUP="${ENABLE_OFFSITE_BACKUP,,}"
   [[ "${ENABLE_OFFSITE_BACKUP}" == "yes" || "${ENABLE_OFFSITE_BACKUP}" == "no" ]] \
@@ -109,7 +127,10 @@ collect_configuration() {
   [[ "${RCLONE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid RCLONE_VERSION"
   [[ -f "${APP_ROOT}/package.json" && -f "${APP_ROOT}/scripts/lib/backup.mjs" ]] || fail "APP_ROOT is not a compatible project checkout"
   [[ -f "${APP_ROOT}/.env" ]] || fail "Application .env is missing: ${APP_ROOT}/.env"
-  [[ -f "${STORAGE_ROOT}/data/content.json" && -d "${STORAGE_ROOT}/uploads" ]] || fail "Storage root is incomplete"
+  [[ -f "${STORAGE_ROOT}/data/content.json" ]] \
+    || fail "Storage root is incomplete: missing ${STORAGE_ROOT}/data/content.json"
+  [[ -d "${STORAGE_ROOT}/uploads" ]] \
+    || fail "Storage root is incomplete: missing ${STORAGE_ROOT}/uploads"
 }
 
 install_packages() {
