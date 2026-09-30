@@ -182,23 +182,22 @@ sudo journalctl -u vocaloid-producer-blog --since '30 minutes ago' -o cat
 
 日志读取权限仅授予 `root` 和确需排障的 `systemd-journal` 组成员，不要让 Web 服务账户加入该组。上述保留配置作用于本机全部 journald 日志；若服务器已有统一日志策略，应在容量评估后合并配置，而不是直接覆盖。
 
-告警阈值使用 `.env.example` 中的 `SECURITY_ALERT_*` 与 `SECURITY_DISK_*` 配置。未配置 Webhook 时，告警仍进入 journald。需要外发时配置一个接收 JSON 的公网 HTTPS 端点，并将其精确域名加入白名单：
+告警阈值使用 `.env.example` 中的 `SECURITY_ALERT_*` 与 `SECURITY_DISK_*` 配置。当前生产服务器明确不使用 Webhook 外发，`.env` 必须保持以下配置：
 
 ```dotenv
-SECURITY_ALERT_WEBHOOK_URL=https://alerts.example.com/hooks/保密路径
-SECURITY_ALERT_WEBHOOK_HOSTS=alerts.example.com
+SECURITY_ALERT_WEBHOOK_URL=
+SECURITY_ALERT_WEBHOOK_HOSTS=
 SECURITY_ALERT_TIMEOUT_SECONDS=5
 ```
 
-Webhook URL 可能包含密钥，只能保存在权限为 `600` 的 `.env` 中。服务端会拒绝 HTTP、IP 字面量、非标准端口、非白名单主机以及解析到私网或环回地址的目标。重启应用后执行送达验收并记录收到告警的时间：
+应用仍会将阈值告警以 `security_alert` JSON 写入 stderr，并由 journald 保存。当前部署不执行 `npm run security:test-alert`，也不会向维护者主动推送通知。维护者应使用以下命令定期检查最近告警：
 
 ```bash
-npm run security:test-alert
 sudo journalctl -u vocaloid-producer-blog --since '5 minutes ago' -o cat \
-  | grep -E 'security_alert|security_alert_delivery'
+  | grep '"level":"security_alert"'
 ```
 
-命令必须输出 `Security test alert delivered successfully.`，接收端应在约定时间内收到 `event: test`，日志中应同时出现 `security_alert_delivery` 的 `succeeded` 记录。若送达失败，脚本返回非零状态，先检查白名单、DNS、证书和接收端响应，不得通过放宽 SSRF 校验解决。
+这意味着服务器具备检测和留存能力，但没有主动送达能力。若未来改变该部署决策，必须重新完成 Webhook 主机白名单、SSRF 防护和真实送达验收，不能直接填写未经审核的地址。
 
 仅从服务器本机验证 Express：
 
@@ -434,7 +433,7 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 - [x] 3.7 后台读取、内容保存、输入校验和版本冲突已通过生产冒烟测试。
 - [x] 3.8 生产构建可追溯到 `6137eed8847666683fa58f605eb83ad329c0b74d`，且 `dirty: false`。
 - [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
-- [ ] 为 3.9 配置生产告警 Webhook，执行 `npm run security:test-alert` 并记录实际送达时间。
+- [x] 3.9 采用 journald 本地留存方案；确认生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL`，不启用主动外发。
 - [ ] 为生产数据建立自动备份、校验和与恢复演练。
 
 PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。

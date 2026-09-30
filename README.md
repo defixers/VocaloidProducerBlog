@@ -150,8 +150,8 @@ PORT=8787
 | `SECURITY_ALERT_PROXY_FAILURE_RATE_PERCENT` | 触发代理异常告警的失败率，默认 50% |
 | `SECURITY_DISK_MIN_FREE_MB` | 触发磁盘空间告警的剩余容量下限，默认 1024 MB |
 | `SECURITY_DISK_CHECK_MINUTES` | 磁盘剩余空间检查周期，默认 5 分钟 |
-| `SECURITY_ALERT_WEBHOOK_URL` | 可选的公网 HTTPS JSON 告警接收地址，完整地址仅保存在服务端 `.env` |
-| `SECURITY_ALERT_WEBHOOK_HOSTS` | Webhook 精确域名白名单；配置 URL 时必填，多个域名使用逗号分隔 |
+| `SECURITY_ALERT_WEBHOOK_URL` | 当前生产服务器明确不配置，保持为空；应用只将告警写入 journald |
+| `SECURITY_ALERT_WEBHOOK_HOSTS` | 当前生产服务器保持为空；仅在未来启用 Webhook 时填写精确域名白名单 |
 | `SECURITY_ALERT_TIMEOUT_SECONDS` | Webhook 请求超时，默认 5 秒 |
 | `PORT` | Express 服务端口，默认 `8787` |
 | `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
@@ -187,7 +187,7 @@ npm run security:hash-password
 
 后台登录按 IP 和管理账户分别限流，连续失败会触发指数退避，同时限制 Argon2id 验证并发数。管理写接口按会话限制请求频率和并发数，JSON 请求体上限为 512 KB。安全日志使用单行 JSON，记录请求 ID、来源 IP 的 HMAC 标识、事件和结果，不记录密码、Cookie、CSRF Token、Authorization Header、文章标题或正文。日志覆盖登录、会话吊销、文章增删改和资源上传删除；暴力登录、异常上传、持续 `5xx`、Bilibili 代理失败和低磁盘空间会触发带冷却时间的告警。
 
-未配置 Webhook 时，告警仍以 `security_alert` JSON 写入标准错误。配置后可使用 `npm run security:test-alert` 验证实际送达；Webhook 只允许连接显式白名单中的公网 HTTPS 主机。生产日志的采集、权限和保留策略见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+当前生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL` 和 `SECURITY_ALERT_WEBHOOK_HOSTS`。告警以 `security_alert` JSON 写入标准错误并由 journald 保存，不进行 Webhook 外发；维护者需要按部署文档定期检查日志。代码保留可选 Webhook 能力，但不属于当前生产部署方案。生产日志的采集、权限和保留策略见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
 仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
 
