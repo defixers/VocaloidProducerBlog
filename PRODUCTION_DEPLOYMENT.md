@@ -265,7 +265,7 @@ sudo install -o root -g root -m 0600 deploy/backup.env.example \
 sudoedit /etc/vocaloid-producer-blog/backup.env
 ```
 
-`/etc/vocaloid-producer-blog/backup.env` 内容为：
+以下 `/etc/vocaloid-producer-blog/backup.env` 示例用于已经启用 OSS 离机副本的模式：
 
 ```dotenv
 BACKUP_APP_ROOT=/home/admin/VocaloidProducerBlog
@@ -281,7 +281,7 @@ BACKUP_TAR_COMMAND=/usr/bin/tar
 RCLONE_CONFIG=/var/lib/vpb-backup/.config/rclone/rclone.conf
 ```
 
-该配置必须保持 `root:root`、权限 `0600`。systemd 以 root 读取配置后，再以 `vpb-backup` 账户运行 root 所有的只读脚本，避免应用账户通过篡改工作区脚本或 `.env` 获取备份密钥与离机凭据。`BACKUP_REPLICA_ARGS` 由 Node 直接传给复制程序，不经过 Shell；必须包含 `{file}`，`{name}` 会替换为备份文件名。生产环境必须保持 `BACKUP_REQUIRE_REPLICA=true`，任何本地创建、加密、校验或离机复制失败都会写入 `security_alert`、返回非零状态并使 systemd 单元失败。
+该配置必须保持 `root:root`、权限 `0600`。systemd 以 root 读取配置后，再以 `vpb-backup` 账户运行 root 所有的只读脚本，避免应用账户通过篡改工作区脚本或 `.env` 获取备份密钥与离机凭据。`BACKUP_REPLICA_ARGS` 由 Node 直接传给复制程序，不经过 Shell；必须包含 `{file}`，`{name}` 会替换为备份文件名。当前已验收的本机模式由一键脚本生成 `BACKUP_REQUIRE_REPLICA=false` 且不配置复制命令；启用 OSS 等离机存储后必须改为 `true`。任何本地创建、加密、校验失败，或启用离机模式后的副本复制失败，都会写入 `security_alert`、返回非零状态并使 systemd 单元失败。
 
 安装并检查定时单元：
 
@@ -329,7 +329,7 @@ sudo cat /var/lib/vocaloid-producer-blog/drills/restore-drill-*.json
 
 #### 从空环境恢复
 
-恢复前从离机存储取回同名 `.vpb` 和 `.sha256` 文件，并从离线密码库恢复密钥。恢复命令拒绝非空目标目录和已存在的环境文件，不会原地覆盖生产数据：
+本机模式从 `BACKUP_LOCAL_DIR` 选择同名 `.vpb` 和 `.sha256` 文件；启用离机存储后，在本机副本不可用时先从离机存储取回这两个文件。整机恢复还必须从服务器外的受控密码库取回加密密钥。恢复命令拒绝非空目标目录和已存在的环境文件，不会原地覆盖生产数据：
 
 ```bash
 sudo systemctl stop vocaloid-producer-blog.service
@@ -589,6 +589,4 @@ DEPLOY_COMMIT=$(git rev-parse HEAD) npm run release:verify
 - [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
 - [x] 3.9 采用 journald 本地留存方案；确认生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL`，不启用主动外发。
 - [x] 3.10 已按本机加密备份方案通过生产验收：首份备份、完整性校验和首次真实恢复演练均完成；暂不配置离机副本的风险已记录并接受。
-- [ ] 3.11 自动化测试、只读生产冒烟和发布门禁已完成实现；待首次真实发布同时通过 `release:preflight` 与 `release:verify` 后完成生产验收。
-
-PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。
+- [x] 3.11 已通过生产验收：首次真实发布的 `release:preflight` 与 `release:verify` 均成功，线上提交 `043cfb6b9338a2bab28ca37cca09d2e5892f231b` 的 10 项只读冒烟检查全部通过且 `dirty: false`。

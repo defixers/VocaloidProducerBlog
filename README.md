@@ -4,9 +4,9 @@
 
 ## 当前安全状态
 
-截至 2026-09-30，安全路线图 3.1 至 3.10 已完成生产验收，3.11 的自动化安全测试与只读发布门禁已完成实现，等待首次真实发布验收。生产环境运行可追溯的干净构建，HTTPS、安全响应头、后台认证、上传下载、Bilibili 代理、内容验证、备份恢复和供应链检查均已验证。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+截至 2026-09-30，安全路线图 3.1 至 3.11 的开发与生产验收均已完成，凭据泄露响应演练和完整数据恢复演练也已完成，本阶段开发目标正式完成。生产环境运行可追溯的干净构建，HTTPS、安全响应头、后台认证、上传下载、Bilibili 代理、内容验证、备份恢复、供应链检查和自动化发布门禁均已验证。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
-本次验收对应提交为 `6137eed8847666683fa58f605eb83ad329c0b74d`。线上 `/build-info.json` 与该提交一致且 `dirty: false`；后续发布仍必须重新执行完整门禁，不能沿用本次结果。
+本次验收对应提交为 `043cfb6b9338a2bab28ca37cca09d2e5892f231b`。线上 `/build-info.json` 与该提交一致且 `dirty: false`；后续发布仍必须重新执行完整门禁，不能沿用本次结果。
 
 ## 功能
 
@@ -159,7 +159,7 @@ PORT=8787
 | `BACKUP_LOCAL_DIR` | 加密备份的本地暂存目录，必须位于 `APP_STORAGE_ROOT` 之外 |
 | `BACKUP_ENCRYPTION_KEY_FILE` | 32 字节备份密钥文件；只允许备份账户读取，不能放入仓库、`.env` 或备份包 |
 | `BACKUP_RETENTION_DAYS` | 本地加密备份保留天数，默认 14 天且始终保留最新一份 |
-| `BACKUP_REQUIRE_REPLICA` | 是否强制离机复制成功才判定备份成功；生产环境必须为 `true` |
+| `BACKUP_REQUIRE_REPLICA` | 是否强制离机复制成功才判定备份成功；当前本机模式为 `false`，启用 OSS 等离机存储后必须为 `true` |
 | `BACKUP_REPLICA_COMMAND` | 离机复制程序的绝对路径，生产示例使用 `/usr/bin/rclone` |
 | `BACKUP_REPLICA_ARGS` | 离机复制参数 JSON 数组，必须包含 `{file}`，可使用 `{name}` |
 | `BACKUP_DRILL_LOG_DIR` | 月度恢复演练记录目录 |
@@ -202,7 +202,7 @@ npm run security:hash-password
 
 ## 备份与恢复
 
-`npm run backup:create` 会备份文章数据、上传资源和服务端 `.env`，使用 AES-256-GCM 认证加密并生成 SHA-256 校验文件。生产环境必须将加密文件和校验文件复制到离机存储，否则命令失败。生产备份配置使用 [backup.env.example](deploy/backup.env.example) 单独部署，不能由应用账户修改。`npm run backup:restore` 只允许恢复到空目录且拒绝覆盖现有环境文件；`npm run backup:drill` 在临时目录执行完整恢复、逐文件校验和资源一致性检查，并保存演练记录。定时任务、密钥隔离、离机存储和恢复步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
+`npm run backup:create` 会备份文章数据、上传资源和服务端 `.env`，使用 AES-256-GCM 认证加密并生成 SHA-256 校验文件。当前生产环境暂时采用本机模式，备份成功不要求离机复制；该模式无法应对整机损坏或服务器失陷，风险已经记录并接受。启用 OSS 等外部存储后，必须同时复制加密文件和校验文件，任何离机复制失败都应使备份任务失败。[backup.env.example](deploy/backup.env.example) 是启用离机副本时的配置模板，不能由应用账户修改。`npm run backup:restore` 只允许恢复到空目录且拒绝覆盖现有环境文件；`npm run backup:drill` 在临时目录执行完整恢复、逐文件校验和资源一致性检查，并保存演练记录。定时任务、密钥隔离、离机存储和恢复步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
 Alibaba Cloud Linux 3 可直接运行一键安装脚本：
 
