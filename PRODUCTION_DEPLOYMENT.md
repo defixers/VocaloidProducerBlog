@@ -216,7 +216,7 @@ sudo journalctl -u vocaloid-producer-blog --since '5 minutes ago' -o cat \
 sudo bash deploy/setup-alinux3-backup.sh
 ```
 
-脚本会从项目 `.env` 读取 `APP_STORAGE_ROOT`；该值为空时，如果仓库内存在 `server/data/content.json` 和 `server/uploads/`，会自动使用项目的 `server/` 目录。脚本默认询问是否启用 OSS。选择 `no` 时不需要任何外部存储，自动完成备份账户、ACL、密钥、root 只读程序、独立配置、systemd 单元、首份本机加密备份、首次恢复演练和定时器启用。该模式只能临时防范应用数据误删，不能应对整机损坏、系统盘丢失或服务器失陷，并且不满足 3.10 的离机副本验收要求。
+脚本会从项目 `.env` 读取 `APP_STORAGE_ROOT`；该值为空时，如果仓库内存在 `server/data/content.json` 和 `server/uploads/`，会自动使用项目的 `server/` 目录。脚本默认询问是否启用 OSS。选择 `no` 时不需要任何外部存储，自动完成备份账户、ACL、密钥、root 只读程序、独立配置、systemd 单元、首份本机加密备份、首次恢复演练和定时器启用。当前生产环境按该本机模式完成 3.10 验收，并明确接受其不能应对整机损坏、系统盘丢失或服务器失陷的风险；离机副本保留为后续加固项。
 
 具备外部存储条件后，提前创建私有 OSS Bucket 和专用 RAM 用户，再次运行同一脚本并选择 `yes`。RAM 用户只授予目标 Bucket 前缀所需的列举、上传、读取和删除对象权限，不要使用主账号 AccessKey。脚本会额外安装经过校验的固定版本 rclone，隐藏输入 AccessKey Secret，执行 OSS 上传、下载比对和删除探针，并验证首份离机副本。随后还需在 OSS 控制台启用版本控制及至少 35 天生命周期。
 
@@ -599,6 +599,6 @@ curl -sS -D - -o /dev/null https://utopiap.top/api/bilibili/feed
 - [x] 3.8 生产构建可追溯到 `6137eed8847666683fa58f605eb83ad329c0b74d`，且 `dirty: false`。
 - [x] `main` 规则要求 `Security and reproducible build / verify` 与 `CodeQL / analyze` 成功后才能合并。
 - [x] 3.9 采用 journald 本地留存方案；确认生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL`，不启用主动外发。
-- [ ] 3.10 实现和自动化测试已完成；待配置生产离机存储、生成首份备份并完成首次真实恢复演练。
+- [x] 3.10 已按本机加密备份方案通过生产验收：首份备份、完整性校验和首次真实恢复演练均完成；暂不配置离机副本的风险已记录并接受。
 
 PR #1 会将视频封面改回浏览器直连 Bilibili CDN 并移除服务端图片代理，会破坏 3.6 的安全边界且与当前 CSP 冲突，不应按现状合并。
