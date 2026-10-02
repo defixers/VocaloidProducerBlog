@@ -7,6 +7,7 @@ import {
 } from '@lucide/vue'
 import { fetchBilibiliFeed } from './services/bilibili'
 import { renderMarkdown } from './security/markdown.js'
+import { formatBytes, SIZE_ONLY_META } from './utils/formatBytes.js'
 
 const activeSection = ref('home')
 const activeArticle = ref(null)
@@ -211,7 +212,7 @@ onMounted(async () => {
         <div class="asset-list">
           <div v-for="asset in assets.slice(0, 3)" :key="asset.id" class="asset-row">
             <span class="asset-icon"><Music2 /></span>
-            <div><h3>{{ asset.name }}</h3><p>{{ asset.meta }}</p></div>
+            <div><h3>{{ asset.name }}</h3><p><template v-if="asset.meta && !SIZE_ONLY_META.test(asset.meta)">{{ asset.meta }} · </template>{{ formatBytes(asset.size) }}</p></div>
             <span class="license">{{ asset.tag }}</span>
             <button class="download-button" :aria-label="`下载 ${asset.name}`" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="20"/><Download v-else :size="20"/></button>
           </div>
@@ -269,7 +270,7 @@ onMounted(async () => {
       <section class="section-wrap full-assets">
         <div v-for="asset in assets" :key="asset.id" class="asset-row">
           <span class="asset-icon"><Music2 /></span>
-          <div><h2>{{ asset.name }}</h2><p>{{ asset.meta }}</p></div>
+          <div><h2>{{ asset.name }}</h2><p><template v-if="asset.meta && !SIZE_ONLY_META.test(asset.meta)">{{ asset.meta }} · </template>{{ formatBytes(asset.size) }}</p></div>
           <span class="license">{{ asset.tag }}</span>
           <button class="primary-button small" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="17"/><Download v-else :size="17"/>{{ downloaded === asset.id ? '已加入下载' : '下载' }}</button>
         </div>
