@@ -6,7 +6,7 @@
 
 1. 准备全新 ECS 实例。安全组开放 TCP 80/443，保留你的 SSH 访问规则，不开放 8787。
 2. 准备域名及覆盖主域名、www 域名的有效 PEM 证书完整链和私钥，上传到服务器。安装脚本复制证书，不自动签发或续期。
-3. 确认当前系统配置的官方软件仓库提供 `nginx`、`clamav` 和 `clamav-update`。缺包时安装会中止，不自动加入其他发行版的仓库。可先执行 `sudo dnf info nginx clamav clamav-update`。
+3. 确认当前系统配置的软件仓库提供 `nginx` 等基础包。ClamAV 不使用 EPEL 9 版本：该版本依赖 Alibaba Cloud Linux 4 不提供的 OpenSSL ABI。脚本下载固定版本的 ClamAV 官方 RPM并校验 SHA-256，安装该 RPM 时明确排除 EPEL。
 4. 将包含本安装脚本、经过审核的提交推送到仓库，再在服务器克隆。构建要求干净的 Git 工作区。私有仓库使用你已有的 Git 认证方式。
 
 ```bash
@@ -35,7 +35,7 @@ sudo env DOMAIN=utopiap.top WWW_DOMAIN=www.utopiap.top \
 - 将运行数据放在 `/var/lib/vocaloid-producer-blog`，不放入 Git 工作区。
 - 安装 Nginx HTTPS 反向代理、安全响应头、后台禁用缓存和登录限流；其他 API 的限流由应用执行。
 - 创建 nftables 独立规则表，阻止非回环接口访问 8787，并让应用依赖该防护服务启动。
-- 安装 ClamAV，首次更新病毒库，启用每六小时更新定时器。
+- 安装固定版本、校验过 SHA-256 的 ClamAV 官方 RPM，以独立 `vpb-clamav` 账户维护病毒库，首次更新病毒库并启用每六小时更新定时器。
 - 安装独立 `vpb-backup` 账户和 root 所有的备份程序，生成 AES-256-GCM 备份密钥，执行首次备份、恢复演练，启用每 12 小时备份及每月演练。
 - 校验 systemd 和 Nginx 配置，并通过本机 HTTPS 请求验证证书链、域名和健康接口。
 
@@ -49,6 +49,7 @@ sudo env DOMAIN=utopiap.top WWW_DOMAIN=www.utopiap.top \
 | TLS 证书及备份配置/密钥 | `/etc/vocaloid-producer-blog` |
 | 加密备份 | `/var/backups/vocaloid-producer-blog` |
 | 备份程序 | `/opt/vocaloid-producer-blog-backup` |
+| ClamAV 病毒库 | `/var/lib/vpb-clamav/database` |
 | Nginx 站点 | `/etc/nginx/conf.d/vocaloid-producer-blog.conf` |
 
 ```bash

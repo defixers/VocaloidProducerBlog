@@ -8,7 +8,11 @@ STORE=/var/lib/vocaloid-producer-blog
 CONFIG=/etc/vocaloid-producer-blog
 BACKUPS=/var/backups/vocaloid-producer-blog
 SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+CLAMAV_VERSION=1.5.4
+CLAMAV_DATABASE=/var/lib/vpb-clamav/database
 WORK=''
+CLAMSCAN_BIN=''
+FRESHCLAM_BIN=''
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[install] %s\n' "$*"; }
 cleanup() {
@@ -35,7 +39,7 @@ preflight() {
     /etc/systemd/system/vpb-freshclam.timer /etc/vpb-port-guard.nft; do
     [[ ! -e "$target" && ! -L "$target" ]] || fail "Existing installation target: $target. Use the upgrade/migration procedure instead."
   done
-  for account in vpb vpb-build vpb-backup; do
+  for account in vpb vpb-build vpb-backup vpb-clamav; do
     ! id "$account" >/dev/null 2>&1 || fail "Account already exists: $account"
   done
   prompt DOMAIN 'Primary domain' utopiap.top
@@ -61,9 +65,10 @@ preflight() {
 }
 
 install_runtime() {
-  # Fail if the configured OS repositories do not provide a required package.
-  # Do not substitute EL9 repositories or disable SELinux on Linux 4.
-  dnf install -y nginx curl ca-certificates openssl tar xz acl util-linux nftables clamav clamav-update
+  # EPEL 9 ClamAV currently requires an OpenSSL ABI that Alibaba Cloud Linux 4
+  # does not provide. Install only generic OS packages from configured repos;
+  # the pinned upstream ClamAV RPM is installed below.
+  dnf install -y nginx curl ca-certificates openssl tar xz acl util-linux nftables
   if command -v getenforce >/dev/null && [[ "$(getenforce)" != Disabled ]]; then
     dnf install -y policycoreutils-python-utils
     setsebool -P httpd_can_network_connect on
@@ -74,14 +79,37 @@ install_runtime() {
   done
   [[ "$(openssl x509 -in "$TLS_CERT" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum)" == \
      "$(openssl pkey -in "$TLS_KEY" -pubout -outform DER | sha256sum)" ]] || fail 'Certificate/key mismatch.'
-  local version arch archive
+  local version arch archive clamav_arch clamav_rpm clamav_sha256
   version="$(tr -d '\r\n' < "$SOURCE/.nvmrc")"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Invalid .nvmrc'
-  case "$(uname -m)" in x86_64) arch=x64;; aarch64) arch=arm64;; *) fail 'Unsupported architecture';; esac
+  case "$(uname -m)" in
+    x86_64)
+      arch=x64
+      clamav_arch=x86_64
+      clamav_sha256=1f4d381226b3cb5f4b1897253a496cf774a975fa1934e8610d7899f614f144dc
+      ;;
+    aarch64)
+      arch=arm64
+      clamav_arch=aarch64
+      clamav_sha256=72cb798eb6afa19cd79dc3a40bd54f36146197db00cfc7e5594389a713869c0c
+      ;;
+    *) fail 'Unsupported architecture';;
+  esac
   NODE_ROOT="/opt/vpb-node-$version-$arch"
   [[ ! -e "$NODE_ROOT" ]] || fail "Runtime directory already exists: $NODE_ROOT"
   archive="node-v$version-linux-$arch.tar.xz"
   WORK="$(mktemp -d /tmp/vpb-install.XXXXXXXX)"
+  clamav_rpm="clamav-${CLAMAV_VERSION}.linux.${clamav_arch}.rpm"
+  curl -fSL --proto '=https' --proto-redir '=https' \
+    "https://github.com/Cisco-Talos/clamav/releases/download/clamav-${CLAMAV_VERSION}/${clamav_rpm}" \
+    -o "$WORK/$clamav_rpm"
+  printf '%s  %s\n' "$clamav_sha256" "$clamav_rpm" > "$WORK/CLAMAV-CHECKSUM"
+  (cd "$WORK"; sha256sum -c CLAMAV-CHECKSUM)
+  dnf install -y --disablerepo='epel*' "$WORK/$clamav_rpm"
+  CLAMSCAN_BIN="$(command -v clamscan)"
+  FRESHCLAM_BIN="$(command -v freshclam)"
+  [[ -x "$CLAMSCAN_BIN" && -x "$FRESHCLAM_BIN" ]] || fail 'The official ClamAV RPM did not install clamscan and freshclam.'
+  [[ "$(clamscan --version)" == "ClamAV ${CLAMAV_VERSION}"* ]] || fail 'Unexpected ClamAV version.'
   curl -fSL --proto '=https' --proto-redir '=https' "https://nodejs.org/dist/v$version/$archive" -o "$WORK/$archive"
   curl -fSL --proto '=https' --proto-redir '=https' "https://nodejs.org/dist/v$version/SHASUMS256.txt" -o "$WORK/SHA256SUMS"
   (cd "$WORK"; awk -v name="$archive" '$2 == name { print }' SHA256SUMS > CHECKSUM; test -s CHECKSUM; sha256sum -c CHECKSUM)
@@ -95,7 +123,7 @@ install_runtime() {
   if [[ "$(npm --version)" != "$npm_version" ]]; then npm install -g "npm@$npm_version" --ignore-scripts --registry=https://registry.npmjs.org; fi
   chmod -R a+rX "$NODE_ROOT"
   chmod -R go-w "$NODE_ROOT"
-  for account in vpb vpb-build vpb-backup; do
+  for account in vpb vpb-build vpb-backup vpb-clamav; do
     useradd --system --user-group --create-home --home-dir "/var/lib/$account" --shell /usr/sbin/nologin "$account"
   done
   install -d -o root -g root -m 0755 "$APP"
@@ -133,14 +161,14 @@ configure_application() {
   ' "$WORK/password.env" "$APP/scripts/hash-admin-password.mjs"
   install -o root -g vpb -m 0640 "$APP/.env.example" "$APP/.env"
   # Parse the helper output rather than sourcing an environment file as shell code.
-  node --input-type=module - "$APP/.env" "$WORK/password.env" "$DOMAIN" "$WWW_DOMAIN" <<'JS'
+  CLAMSCAN_BIN="$CLAMSCAN_BIN" node --input-type=module - "$APP/.env" "$WORK/password.env" "$DOMAIN" "$WWW_DOMAIN" <<'JS'
 import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 const [file, passwordFile, domain, www] = process.argv.slice(2);
 const hash = readFileSync(passwordFile, 'utf8').match(/^ADMIN_PASSWORD_HASH=(.+)$/m)?.[1];
 if (!hash) throw new Error('Password hash was not generated');
 let source = readFileSync(file, 'utf8');
-const changes = { ADMIN_PASSWORD_HASH: hash, APP_ORIGIN: [...new Set([domain,www])].map(x=>'https://'+x).join(','), APP_STORAGE_ROOT: '/var/lib/vocaloid-producer-blog', SECURITY_LOG_IP_KEY: randomBytes(32).toString('hex'), UPLOAD_VIRUS_SCAN_COMMAND: '/usr/bin/clamscan' };
+const changes = { ADMIN_PASSWORD_HASH: hash, APP_ORIGIN: [...new Set([domain,www])].map(x=>'https://'+x).join(','), APP_STORAGE_ROOT: '/var/lib/vocaloid-producer-blog', SECURITY_LOG_IP_KEY: randomBytes(32).toString('hex'), UPLOAD_VIRUS_SCAN_COMMAND: process.env.CLAMSCAN_BIN, UPLOAD_VIRUS_SCAN_ARGS: JSON.stringify(['--no-summary','--database=/var/lib/vpb-clamav/database']) };
 for (const [key,value] of Object.entries(changes)) source=source.replace(new RegExp('^'+key+'=.*$', 'm'), ()=>key+'='+value);
 writeFileSync(file, source);
 JS
@@ -188,18 +216,32 @@ UMask=0027
 [Install]
 WantedBy=multi-user.target
 EOF
-  # freshclam must succeed before any archive uploads are enabled.
-  command -v freshclam >/dev/null || fail 'freshclam is unavailable.'
-  if [[ -f /etc/freshclam.conf ]]; then sed -i '/^[[:space:]]*Example[[:space:]]*$/d' /etc/freshclam.conf; fi
-  freshclam
+  # Use a dedicated writable database and updater account. The application can
+  # read signatures through its vpb group but cannot replace them.
+  install -d -o vpb-clamav -g vpb -m 0750 "$CLAMAV_DATABASE"
+  cat > "$CONFIG/freshclam.conf" <<EOF
+DatabaseDirectory $CLAMAV_DATABASE
+DatabaseMirror database.clamav.net
+EOF
+  chown root:vpb "$CONFIG/freshclam.conf"
+  chmod 0640 "$CONFIG/freshclam.conf"
+  runuser -u vpb-clamav -- "$FRESHCLAM_BIN" --config-file="$CONFIG/freshclam.conf"
   cat > /etc/systemd/system/vpb-freshclam.service <<'EOF'
 [Unit]
 Description=Update ClamAV signatures
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/freshclam
+User=vpb-clamav
+Group=vpb
+ExecStart=FRESHCLAM_COMMAND --config-file=/etc/vocaloid-producer-blog/freshclam.conf
 TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vpb-clamav/database
 EOF
+  sed -i "s|FRESHCLAM_COMMAND|$FRESHCLAM_BIN|" /etc/systemd/system/vpb-freshclam.service
   cat > /etc/systemd/system/vpb-freshclam.timer <<'EOF'
 [Unit]
 Description=Update ClamAV signatures every six hours
