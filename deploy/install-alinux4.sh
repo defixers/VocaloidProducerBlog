@@ -13,6 +13,8 @@ CLAMAV_DATABASE=/var/lib/vpb-clamav/database
 WORK=''
 CLAMSCAN_BIN=''
 FRESHCLAM_BIN=''
+RESUME=false
+ADMIN_PASSWORD=''
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[install] %s\n' "$*"; }
 cleanup() {
@@ -28,20 +30,75 @@ prompt() {
   printf -v "$key" '%s' "${value:-$fallback}"
 }
 
+parse_args() {
+  [[ $# -le 1 ]] || fail 'Usage: sudo bash deploy/install-alinux4.sh [--resume]'
+  if [[ $# == 1 ]]; then
+    [[ "$1" == --resume ]] || fail 'Usage: sudo bash deploy/install-alinux4.sh [--resume]'
+    RESUME=true
+  fi
+}
+
+prompt_admin_password() {
+  local confirmation=''
+  [[ -t 0 ]] || fail 'Admin password entry requires an interactive terminal.'
+  while true; do
+    read -r -s -p 'Admin password (at least 12 characters): ' ADMIN_PASSWORD
+    printf '\n'
+    if [[ ${#ADMIN_PASSWORD} -lt 12 ]]; then
+      printf 'Password must contain at least 12 characters. Try again.\n' >&2
+      continue
+    fi
+    read -r -s -p 'Confirm admin password: ' confirmation
+    printf '\n'
+    if [[ "$ADMIN_PASSWORD" == "$confirmation" ]]; then break; fi
+    printf 'Passwords do not match. Try again.\n' >&2
+  done
+  confirmation=''
+}
+
+require_resume_state() {
+  local target account
+  [[ -d "$APP" && ! -L "$APP" && -d "$APP/.git" && ! -L "$APP/.git" ]] || fail "Cannot resume: missing or unsafe Git checkout at $APP."
+  [[ -d "$STORE" && ! -L "$STORE" && -f "$STORE/data/content.json" && ! -L "$STORE/data/content.json" \
+    && -d "$STORE/uploads" && ! -L "$STORE/uploads" ]] || fail 'Cannot resume: initial application data is incomplete or unsafe.'
+  [[ -d "$CONFIG" && ! -L "$CONFIG" && -f "$CONFIG/fullchain.pem" && ! -L "$CONFIG/fullchain.pem" \
+    && -f "$CONFIG/privkey.pem" && ! -L "$CONFIG/privkey.pem" ]] || fail 'Cannot resume: installed TLS files are incomplete or unsafe.'
+  for target in "$APP/.env" "$BACKUPS" /opt/vocaloid-producer-blog-backup "$CLAMAV_DATABASE" \
+    "$STORE/drills" "$CONFIG/freshclam.conf" "$CONFIG/backup.key" "$CONFIG/backup.env" \
+    /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
+    /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
+    /etc/systemd/system/vpb-freshclam.timer /etc/systemd/system/vocaloid-producer-blog-backup.service \
+    /etc/systemd/system/vocaloid-producer-blog-backup.timer \
+    /etc/systemd/system/vocaloid-producer-blog-restore-drill.service \
+    /etc/systemd/system/vocaloid-producer-blog-restore-drill.timer /etc/vpb-port-guard.nft; do
+    [[ ! -e "$target" && ! -L "$target" ]] || fail "Cannot resume: unexpected installation artifact: $target"
+  done
+  for account in vpb vpb-build vpb-backup vpb-clamav; do
+    id "$account" >/dev/null 2>&1 || fail "Cannot resume: missing account: $account"
+  done
+  [[ -z "$(git -C "$APP" status --porcelain)" ]] || fail 'Cannot resume: the installed application checkout is not clean.'
+  TLS_CERT="$CONFIG/fullchain.pem"
+  TLS_KEY="$CONFIG/privkey.pem"
+}
+
 preflight() {
-  [[ "$EUID" == 0 ]] || fail 'Run with sudo bash deploy/install-alinux4.sh'
+  [[ "$EUID" == 0 ]] || fail 'Run with sudo bash deploy/install-alinux4.sh [--resume]'
   source /etc/os-release
   [[ "${ID:-}" == alinux && "${VERSION_ID:-}" =~ ^4([.]|$) ]] || fail 'Requires Alibaba Cloud Linux 4.'
   [[ -d /run/systemd/system ]] || fail 'Requires a host running systemd.'
-  for target in "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
-    /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
-    /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
-    /etc/systemd/system/vpb-freshclam.timer /etc/vpb-port-guard.nft; do
-    [[ ! -e "$target" && ! -L "$target" ]] || fail "Existing installation target: $target. Use the upgrade/migration procedure instead."
-  done
-  for account in vpb vpb-build vpb-backup vpb-clamav; do
-    ! id "$account" >/dev/null 2>&1 || fail "Account already exists: $account"
-  done
+  if [[ "$RESUME" == true ]]; then
+    require_resume_state
+  else
+    for target in "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
+      /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
+      /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
+      /etc/systemd/system/vpb-freshclam.timer /etc/vpb-port-guard.nft; do
+      [[ ! -e "$target" && ! -L "$target" ]] || fail "Existing installation target: $target. Use the upgrade/migration procedure instead."
+    done
+    for account in vpb vpb-build vpb-backup vpb-clamav; do
+      ! id "$account" >/dev/null 2>&1 || fail "Account already exists: $account"
+    done
+  fi
   prompt DOMAIN 'Primary domain' utopiap.top
   prompt WWW_DOMAIN 'Second domain (use the primary domain again for a single-domain site)' "www.$DOMAIN"
   for domain in "$DOMAIN" "$WWW_DOMAIN"; do
@@ -52,8 +109,10 @@ preflight() {
       [[ "$label" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "Invalid domain label: $label"
     done
   done
-  prompt TLS_CERT 'Absolute path to PEM full certificate chain'
-  prompt TLS_KEY 'Absolute path to PEM private key'
+  if [[ "$RESUME" != true ]]; then
+    prompt TLS_CERT 'Absolute path to PEM full certificate chain'
+    prompt TLS_KEY 'Absolute path to PEM private key'
+  fi
   [[ "$TLS_CERT" == /* && -f "$TLS_CERT" && "$TLS_KEY" == /* && -f "$TLS_KEY" ]] || fail 'Certificate and private key files are required.'
   command -v git >/dev/null || fail 'Install git and clone this repository first: sudo dnf install -y git'
   [[ -z "$(git -C "$SOURCE" status --porcelain)" ]] || fail 'The source checkout must be clean. Commit the installer before distribution.'
@@ -62,6 +121,7 @@ preflight() {
   if command -v ss >/dev/null; then
     [[ -z "$(ss -H -ltn '( sport = :80 or sport = :443 or sport = :8787 )')" ]] || fail 'Ports 80, 443 or 8787 are in use. This installer is for a fresh host.'
   fi
+  prompt_admin_password
 }
 
 install_runtime() {
@@ -96,25 +156,34 @@ install_runtime() {
     *) fail 'Unsupported architecture';;
   esac
   NODE_ROOT="/opt/vpb-node-$version-$arch"
-  [[ ! -e "$NODE_ROOT" ]] || fail "Runtime directory already exists: $NODE_ROOT"
   archive="node-v$version-linux-$arch.tar.xz"
   WORK="$(mktemp -d /tmp/vpb-install.XXXXXXXX)"
   clamav_rpm="clamav-${CLAMAV_VERSION}.linux.${clamav_arch}.rpm"
-  curl -fSL --proto '=https' --proto-redir '=https' \
-    "https://github.com/Cisco-Talos/clamav/releases/download/clamav-${CLAMAV_VERSION}/${clamav_rpm}" \
-    -o "$WORK/$clamav_rpm"
-  printf '%s  %s\n' "$clamav_sha256" "$clamav_rpm" > "$WORK/CLAMAV-CHECKSUM"
-  (cd "$WORK"; sha256sum -c CLAMAV-CHECKSUM)
-  dnf install -y --disablerepo='epel*' "$WORK/$clamav_rpm"
-  CLAMSCAN_BIN="$(command -v clamscan)"
-  FRESHCLAM_BIN="$(command -v freshclam)"
+  if [[ "$RESUME" == true ]]; then
+    CLAMSCAN_BIN="$(command -v clamscan)" || fail 'Cannot resume: clamscan is not installed.'
+    FRESHCLAM_BIN="$(command -v freshclam)" || fail 'Cannot resume: freshclam is not installed.'
+  else
+    curl -fSL --proto '=https' --proto-redir '=https' \
+      "https://github.com/Cisco-Talos/clamav/releases/download/clamav-${CLAMAV_VERSION}/${clamav_rpm}" \
+      -o "$WORK/$clamav_rpm"
+    printf '%s  %s\n' "$clamav_sha256" "$clamav_rpm" > "$WORK/CLAMAV-CHECKSUM"
+    (cd "$WORK"; sha256sum -c CLAMAV-CHECKSUM)
+    dnf install -y --disablerepo='epel*' "$WORK/$clamav_rpm"
+    CLAMSCAN_BIN="$(command -v clamscan)"
+    FRESHCLAM_BIN="$(command -v freshclam)"
+  fi
   [[ -x "$CLAMSCAN_BIN" && -x "$FRESHCLAM_BIN" ]] || fail 'The official ClamAV RPM did not install clamscan and freshclam.'
-  [[ "$(clamscan --version)" == "ClamAV ${CLAMAV_VERSION}"* ]] || fail 'Unexpected ClamAV version.'
-  curl -fSL --proto '=https' --proto-redir '=https' "https://nodejs.org/dist/v$version/$archive" -o "$WORK/$archive"
-  curl -fSL --proto '=https' --proto-redir '=https' "https://nodejs.org/dist/v$version/SHASUMS256.txt" -o "$WORK/SHA256SUMS"
-  (cd "$WORK"; awk -v name="$archive" '$2 == name { print }' SHA256SUMS > CHECKSUM; test -s CHECKSUM; sha256sum -c CHECKSUM)
-  install -d -o root -g root -m 0755 "$NODE_ROOT"
-  tar -xJf "$WORK/$archive" -C "$NODE_ROOT" --strip-components=1
+  [[ "$("$CLAMSCAN_BIN" --version)" == "ClamAV ${CLAMAV_VERSION}"* ]] || fail 'Unexpected ClamAV version.'
+  if [[ -e "$NODE_ROOT" ]]; then
+    [[ "$RESUME" == true && -d "$NODE_ROOT/bin" ]] || fail "Runtime directory already exists: $NODE_ROOT"
+  else
+    [[ "$RESUME" != true ]] || fail "Cannot resume: missing Node runtime directory: $NODE_ROOT"
+    curl -fSL --proto '=https' --proto-redir '=https' "https://nodejs.org/dist/v$version/$archive" -o "$WORK/$archive"
+    curl -fSL --proto '=https' --proto-redir '=https' "https://nodejs.org/dist/v$version/SHASUMS256.txt" -o "$WORK/SHA256SUMS"
+    (cd "$WORK"; awk -v name="$archive" '$2 == name { print }' SHA256SUMS > CHECKSUM; test -s CHECKSUM; sha256sum -c CHECKSUM)
+    install -d -o root -g root -m 0755 "$NODE_ROOT"
+    tar -xJf "$WORK/$archive" -C "$NODE_ROOT" --strip-components=1
+  fi
   export PATH="$NODE_ROOT/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   [[ "$(node -p 'process.versions.node')" == "$version" ]] || fail 'Wrong Node version.'
   local npm_version
@@ -123,12 +192,17 @@ install_runtime() {
   if [[ "$(npm --version)" != "$npm_version" ]]; then npm install -g "npm@$npm_version" --ignore-scripts --registry=https://registry.npmjs.org; fi
   chmod -R a+rX "$NODE_ROOT"
   chmod -R go-w "$NODE_ROOT"
-  for account in vpb vpb-build vpb-backup vpb-clamav; do
-    useradd --system --user-group --create-home --home-dir "/var/lib/$account" --shell /usr/sbin/nologin "$account"
-  done
-  install -d -o root -g root -m 0755 "$APP"
-  git clone --no-local "$SOURCE" "$APP"
-  git -C "$APP" checkout --detach "$COMMIT"
+  if [[ "$RESUME" != true ]]; then
+    for account in vpb vpb-build vpb-backup vpb-clamav; do
+      useradd --system --user-group --create-home --home-dir "/var/lib/$account" --shell /usr/sbin/nologin "$account"
+    done
+    install -d -o root -g root -m 0755 "$APP"
+    git clone --no-local "$SOURCE" "$APP"
+    git -C "$APP" checkout --detach "$COMMIT"
+  else
+    git -C "$APP" fetch --no-tags "$SOURCE" "$COMMIT"
+    git -C "$APP" checkout --detach FETCH_HEAD
+  fi
   chown -R vpb-build:vpb-build "$APP"
   log 'Installing locked dependencies and running the release checks as an unprivileged build account'
   (
@@ -147,18 +221,23 @@ install_runtime() {
 }
 
 configure_application() {
-  install -d -o root -g vpb -m 0750 "$CONFIG"
-  install -d -o vpb -g vpb -m 0750 "$STORE" "$STORE/data" "$STORE/uploads"
-  install -o vpb -g vpb -m 0640 "$APP/server/data/content.json" "$STORE/data/content.json"
-  install -o root -g root -m 0644 "$TLS_CERT" "$CONFIG/fullchain.pem"
-  install -o root -g root -m 0600 "$TLS_KEY" "$CONFIG/privkey.pem"
-  log 'Choose an admin password (hidden input; at least 12 characters)'
-  node --input-type=module -e '
+  if [[ "$RESUME" != true ]]; then
+    install -d -o root -g vpb -m 0750 "$CONFIG"
+    install -d -o vpb -g vpb -m 0750 "$STORE" "$STORE/data" "$STORE/uploads"
+    install -o vpb -g vpb -m 0640 "$APP/server/data/content.json" "$STORE/data/content.json"
+    install -o root -g root -m 0644 "$TLS_CERT" "$CONFIG/fullchain.pem"
+    install -o root -g root -m 0600 "$TLS_KEY" "$CONFIG/privkey.pem"
+  fi
+  printf '%s' "$ADMIN_PASSWORD" | node --input-type=module -e '
     import { writeFileSync } from "node:fs";
     import { pathToFileURL } from "node:url";
-    console.log = value => writeFileSync(process.argv[1], String(value) + "\n", { mode: 0o600 });
-    await import(pathToFileURL(process.argv[2]).href);
-  ' "$WORK/password.env" "$APP/scripts/hash-admin-password.mjs"
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const { hashAdminPassword } = await import(pathToFileURL(process.argv[1]).href);
+    const hash = await hashAdminPassword(Buffer.concat(chunks).toString("utf8"));
+    writeFileSync(process.argv[2], `ADMIN_PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
+  ' "$APP/server/security/password.js" "$WORK/password.env"
+  ADMIN_PASSWORD=''
   install -o root -g vpb -m 0640 "$APP/.env.example" "$APP/.env"
   # Parse the helper output rather than sourcing an environment file as shell code.
   CLAMSCAN_BIN="$CLAMSCAN_BIN" node --input-type=module - "$APP/.env" "$WORK/password.env" "$DOMAIN" "$WWW_DOMAIN" <<'JS'
@@ -374,6 +453,7 @@ start_and_verify() {
 }
 
 main() {
+  parse_args "$@"
   preflight
   install_runtime
   configure_application
