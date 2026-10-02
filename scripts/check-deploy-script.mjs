@@ -16,7 +16,7 @@ if (!bash) {
   process.exit(1)
 }
 
-for (const script of ['deploy/setup-alinux3-backup.sh', 'deploy/release-gate-alinux3.sh']) {
+for (const script of ['deploy/setup-alinux3-backup.sh', 'deploy/release-gate-alinux3.sh', 'deploy/install-alinux4.sh']) {
   const result = spawnSync(bash, ['-n', script], {
     cwd: new URL('..', import.meta.url),
     stdio: 'inherit',

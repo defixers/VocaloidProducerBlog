@@ -296,6 +296,8 @@ npm run optimize:images
 
 ## 构建与部署
 
+Alibaba Cloud Linux 4 全新服务器可使用 [完整安装脚本及说明](deploy/INSTALL_ALINUX4.md)，自动配置运行环境、应用、Nginx HTTPS、上传扫描及本机加密备份。
+
 ```bash
 npm ci
 npm run verify:reproducible
