@@ -271,7 +271,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
       <header class="admin-topbar">
         <button class="admin-menu" :title="menuOpen ? '关闭导航' : '打开导航'" :aria-expanded="menuOpen" aria-controls="admin-navigation" @click="menuOpen = !menuOpen"><X v-if="menuOpen"/><Menu v-else/></button>
         <div><span>UTOPIA CONTENT SYSTEM</span><strong>{{ nav.find(item => item.id === activeView)?.label }}</strong></div>
-        <button class="new-command" @click="newArticle"><Plus :size="17" />新建文章</button>
+        <button v-if="activeView === 'overview'" class="new-command" @click="newArticle"><Plus :size="17" />新建文章</button>
       </header>
 
       <div v-if="activeView === 'overview'" class="admin-page">
@@ -293,7 +293,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
       </div>
 
       <div v-else-if="activeView === 'articles'" class="admin-page">
-        <div class="admin-page-title"><div><span>JOURNAL / 02</span><h1>{{ editorOpen ? (articleForm.id ? '编辑文章' : '新建文章') : '文章管理' }}</h1></div><button v-if="editorOpen" class="quiet-button" @click="editorOpen = false"><ArrowLeft :size="16"/>返回列表</button></div>
+        <div class="admin-page-title"><div><span>JOURNAL / 02</span><h1>{{ editorOpen ? (articleForm.id ? '编辑文章' : '新建文章') : '文章管理' }}</h1></div><button v-if="editorOpen" class="quiet-button" @click="editorOpen = false"><ArrowLeft :size="16"/>返回列表</button><button v-else class="new-command" @click="newArticle"><Plus :size="17" />新建文章</button></div>
 
         <div v-if="!editorOpen" class="content-table">
           <div class="table-head"><span>文章</span><span>状态</span><span>更新</span><span></span></div>
