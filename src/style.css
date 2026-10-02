@@ -57,8 +57,12 @@ a { color: inherit; text-decoration: none; }
 .hero-release span, .hero-release small { font: 600 10px var(--font-label); color: #bfc4bc; }
 .hero-release strong { font-size: 18px; }
 
-.ticker { min-height: 46px; padding: 10px clamp(20px, 5vw, 72px); background: var(--acid); color: #fff; display: flex; align-items: center; gap: 22px; overflow-x: auto; white-space: nowrap; font: 600 12px var(--font-label); }
-.ticker span:first-child { background: var(--ink); color: #fff; padding: 4px 8px; }
+.ticker { min-height: 46px; padding: 10px clamp(20px, 5vw, 72px); background: var(--acid); color: #fff; display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 6px; font: 600 12px var(--font-label); }
+/* 注意用直接子选择器：.ticker-tail 内部的 span 也是各自父级的 first-child，误用会套上黑色标签底色 */
+.ticker > span:first-child { background: var(--ink); color: #fff; padding: 4px 8px; }
+/* 分隔符统一由 ::before 生成，随所属项目一起显示/隐藏，不会留下悬空的「·」 */
+.ticker b + span::before, .ticker .ticker-tail::before, .ticker .ticker-tail > span + span::before { content: '·'; margin-right: 12px; color: rgba(255,255,255,.72); }
+.ticker .ticker-tail { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .section-wrap { width: min(1180px, calc(100% - 48px)); margin-inline: auto; }
 .articles-preview { padding-block: 96px 112px; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 38px; }
@@ -235,7 +239,10 @@ footer small { text-align: right; color: #676b66; font: 500 9px var(--font-label
   .hero h1 { font-size: 70px; }
   .hero-content > p br { display: none; }
   .track-name { display: none; }
-  .ticker { padding-inline: 16px; gap: 14px; }
+  /* 窄屏只保留 UID 与关注数（左对齐），创作风格与歌姬整段不展示 */
+  .ticker { padding-inline: 16px; font-size: 11px; }
+  /* display: none 不会隐藏伪元素，必须显式去掉 content，否则会留下一个悬空的「·」 */
+  .ticker .ticker-tail, .ticker .ticker-tail::before { display: none; content: none; }
   .articles-preview, .video-band, .asset-preview { padding-block: 72px; }
   .section-heading { align-items: flex-start; }
   .section-heading .text-button { font-size: 0; }

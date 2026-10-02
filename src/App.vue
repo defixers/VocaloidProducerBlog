@@ -164,7 +164,7 @@ onMounted(async () => {
       </section>
 
       <section class="ticker" aria-label="站点动态">
-        <span>SYNC / BILIBILI</span><b>UID 1858510441</b><span>·</span><span>42万+关注</span><span>·</span><span>摇滚</span><span>·</span><span>星尘 / 诗岸 / 洛天依</span>
+        <span>SYNC / BILIBILI</span><b>UID 1858510441</b><span>42万+关注</span><span class="ticker-tail"><span>摇滚</span><span>星尘 / 诗岸 / 洛天依</span></span>
       </section>
 
       <section class="section-wrap articles-preview">
