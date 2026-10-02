@@ -435,7 +435,9 @@ DatabaseMirror database.clamav.net
 EOF
   chown root:vpb "$CONFIG/freshclam.conf"
   chmod 0640 "$CONFIG/freshclam.conf"
-  runuser -u vpb-clamav -- "$FRESHCLAM_BIN" --config-file="$CONFIG/freshclam.conf"
+  # Match the User/Group identity used by the systemd updater below. The vpb
+  # group can traverse the config directory and read this root-owned file.
+  runuser -u vpb-clamav -g vpb -- "$FRESHCLAM_BIN" --config-file="$CONFIG/freshclam.conf"
   cat > /etc/systemd/system/vpb-freshclam.service <<'EOF'
 [Unit]
 Description=Update ClamAV signatures
