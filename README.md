@@ -1,302 +1,103 @@
 # Utopia_乌托邦P / 创作档案
 
-为 B 站中文 Vocaloid P 主 Utopia_乌托邦P 定制的个人博客与内容管理系统。项目使用 Vue 3 + Vite 构建主站，以 Express 提供文章、二创资源和后台管理 API。
-
-## 当前安全状态
-
-截至 2026-09-30，安全路线图 3.1 至 3.11 的开发与生产验收均已完成，凭据泄露响应演练和完整数据恢复演练也已完成，本阶段开发目标正式完成。生产环境运行可追溯的干净构建，HTTPS、安全响应头、后台认证、上传下载、Bilibili 代理、内容验证、备份恢复、供应链检查和自动化发布门禁均已验证。状态与证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准，生产发布步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
-
-本次验收对应提交为 `043cfb6b9338a2bab28ca37cca09d2e5892f231b`。线上 `/build-info.json` 与该提交一致且 `dirty: false`；后续发布仍必须重新执行完整门禁，不能沿用本次结果。
+为 B 站中文 Vocaloid P 主 Utopia_乌托邦P 定制的个人博客与内容管理系统。Vue 3 + Vite 提供主站和管理界面，Express 提供内容、二创资源、Bilibili 同步及后台管理 API。
 
 ## 功能
 
 - 作品主页、文章归档、视频列表、动态展示与全文搜索
-- Markdown 文章阅读，以及后台实时预览、草稿和发布管理
-- Bilibili 视频与动态的服务端同步接口
-- 二创资源展示、上传、下载和删除
-- 桌面、平板和手机响应式管理界面
-- WebP 响应式图片、非首屏延迟加载和前后台代码分包
-- Argon2id 管理密码、HttpOnly 会话、CSRF 防护、上传类型限制和 100 MB 文件大小限制
+- Markdown 文章编辑、实时预览、草稿和发布管理
+- Bilibili 视频、动态及图片的服务端同步与缓存
+- 二创资源上传、病毒扫描、受控下载和删除
+- 桌面、平板和手机响应式界面
+- Argon2id 管理密码、HttpOnly 会话、CSRF 防护和分层限流
+- 加密备份、恢复演练、结构化安全日志及生产发布门禁
+
+安全设计、当前阶段和验证证据以 [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md) 为准。具体生产版本必须通过线上 `/build-info.json` 和发布记录确认，README 不固定某次生产提交。
 
 ## 技术栈
 
-- Vue 3
-- Vite
-- Express
-- Marked + DOMPurify
-- Multer
+- Vue 3、Vite
+- Express、Zod、Multer
+- Marked、DOMPurify
 - Lucide Vue
 
-## 快速开始
+## 本地开发
 
-需要 Node.js 24.21.x 和 npm 11.19.0。项目会校验工具链版本，并使用 Node.js 内置 Argon2id 密码哈希。
+需要 Node.js 24.21.x 和 npm 11.19.0。版本由 `package.json` 和 `.nvmrc` 约束。
 
 ```bash
 npm ci
 npm run dev:full
 ```
 
-开发地址：
+本地开发默认不需要 `.env`，并使用以下地址：
 
 - 主站：`http://127.0.0.1:5173/`
 - 管理后台：`http://127.0.0.1:5173/admin`
-- 开发环境管理密码：`utopia-dev`
+- 开发管理密码：`utopia-dev`
 - API 健康检查：`http://127.0.0.1:8787/api/health`
 
-只启动某一部分时可以使用：
+`npm run dev:full` 同时启动 Vite 和 Express。也可分别运行：
 
 ```bash
 npm run dev       # Vite 前端
 npm run server    # Express API
 ```
 
-开发模式下 Vite 会将 `/api` 代理到 `127.0.0.1:8787`，因此后台管理功能需要 Express API 同时运行。上传目录禁止直接访问，资源只能通过受控下载接口获取。
+Vite 将 `/api` 代理到 `127.0.0.1:8787`。如果工作区已有生产 `.env`，服务端会按生产模式启动；本地开发前应移走该文件或使用独立开发配置。
 
-## 环境变量
+## 配置
 
-复制 `.env.example` 为 `.env`：
+应用会在启动时读取仓库根目录的 `.env`。[.env.example](.env.example) 是应用变量的唯一模板；变量用途、开发与生产差异、密码哈希及备份配置见 [CONFIGURATION.md](CONFIGURATION.md)。
 
-```dotenv
-VITE_BILIBILI_SYNC_URL=/api/bilibili/feed
-VITE_BILIBILI_SPACE_URL=https://space.bilibili.com/1858510441
-NODE_ENV=production
-APP_ORIGIN=https://www.utopiap.top,https://utopiap.top
-ARTICLE_IMAGE_HOSTS=
-ADMIN_PASSWORD_HASH=replace-with-output-of-npm-run-security-hash-password
-ADMIN_SESSION_IDLE_MINUTES=30
-ADMIN_SESSION_ABSOLUTE_HOURS=8
-ADMIN_LOGIN_WINDOW_MINUTES=15
-ADMIN_LOGIN_IP_LIMIT=10
-ADMIN_LOGIN_ACCOUNT_LIMIT=30
-ADMIN_LOGIN_BACKOFF_BASE_MS=500
-ADMIN_LOGIN_BACKOFF_MAX_MS=30000
-ADMIN_LOGIN_CONCURRENCY=2
-ADMIN_WRITE_WINDOW_MINUTES=10
-ADMIN_WRITE_LIMIT=60
-ADMIN_WRITE_CONCURRENCY=2
-UPLOAD_MAX_FILE_MB=100
-UPLOAD_TOTAL_QUOTA_MB=1024
-UPLOAD_WINDOW_MINUTES=60
-UPLOAD_LIMIT=10
-UPLOAD_CONCURRENCY=1
-UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB=512
-UPLOAD_ARCHIVE_MAX_FILES=1000
-UPLOAD_ARCHIVE_MAX_DEPTH=10
-UPLOAD_ARCHIVE_MAX_RATIO=100
-APP_STORAGE_ROOT=/var/lib/vocaloid-producer-blog
-UPLOAD_VIRUS_SCAN_COMMAND=clamscan
-UPLOAD_VIRUS_SCAN_ARGS=["--no-summary"]
-UPLOAD_SCAN_TIMEOUT_SECONDS=60
-TRUST_PROXY_HOPS=1
-SERVER_HEADERS_TIMEOUT_SECONDS=15
-SERVER_REQUEST_TIMEOUT_SECONDS=120
-SECURITY_LOG_IP_KEY=replace-with-at-least-32-random-characters
-SECURITY_ALERT_WINDOW_MINUTES=10
-SECURITY_ALERT_COOLDOWN_MINUTES=30
-SECURITY_ALERT_LOGIN_FAILURES=10
-SECURITY_ALERT_UPLOAD_REJECTIONS=5
-SECURITY_ALERT_SERVER_ERRORS=5
-SECURITY_ALERT_PROXY_FAILURES=10
-SECURITY_ALERT_PROXY_MIN_REQUESTS=10
-SECURITY_ALERT_PROXY_FAILURE_RATE_PERCENT=50
-SECURITY_DISK_MIN_FREE_MB=1024
-SECURITY_DISK_CHECK_MINUTES=5
-SECURITY_ALERT_WEBHOOK_URL=
-SECURITY_ALERT_WEBHOOK_HOSTS=
-SECURITY_ALERT_TIMEOUT_SECONDS=5
-PORT=8787
-```
+生产环境不要把明文密码、Bilibili Cookie、Access Key 或备份密钥提交到 Git。`VITE_` 前缀变量会进入浏览器构建，不能保存任何秘密。
 
-下表中的 `BACKUP_*` 变量属于独立的 root 所有 `/etc/vocaloid-producer-blog/backup.env`，不要写入应用 `.env`。模板见 [backup.env.example](deploy/backup.env.example)。
+## 内容与存储
 
-| 变量 | 说明 |
-| --- | --- |
-| `ADMIN_PASSWORD_HASH` | 管理密码的 Argon2id 哈希；生产环境必须设置，不能填写明文密码 |
-| `APP_ORIGIN` | 允许发起管理写请求的 HTTPS Origin；不含路径，多个地址使用逗号分隔 |
-| `ARTICLE_IMAGE_HOSTS` | 可选的文章远程封面 HTTPS 域名白名单，多个域名使用逗号分隔；站内 `/images/` 路径始终允许 |
-| `ADMIN_SESSION_IDLE_MINUTES` | 管理会话空闲过期时间，默认 30 分钟 |
-| `ADMIN_SESSION_ABSOLUTE_HOURS` | 管理会话绝对过期时间，默认 8 小时 |
-| `ADMIN_LOGIN_WINDOW_MINUTES` | 登录限流统计窗口，默认 15 分钟 |
-| `ADMIN_LOGIN_IP_LIMIT` | 单 IP 在统计窗口内允许的失败登录次数，默认 10 次 |
-| `ADMIN_LOGIN_ACCOUNT_LIMIT` | 管理账户在统计窗口内允许的总失败次数，默认 30 次 |
-| `ADMIN_LOGIN_BACKOFF_BASE_MS` | 登录失败指数退避的基础延迟，默认 500 毫秒 |
-| `ADMIN_LOGIN_BACKOFF_MAX_MS` | 登录失败指数退避的最大延迟，默认 30000 毫秒 |
-| `ADMIN_LOGIN_CONCURRENCY` | 同时执行的 Argon2id 密码验证数，默认 2 次 |
-| `ADMIN_WRITE_WINDOW_MINUTES` | 管理写接口限流窗口，默认 10 分钟 |
-| `ADMIN_WRITE_LIMIT` | 单会话在窗口内允许的管理写请求数，默认 60 次 |
-| `ADMIN_WRITE_CONCURRENCY` | 单会话允许的并发写请求数，默认 2 个 |
-| `APP_STORAGE_ROOT` | 可选的服务端存储根目录，必须位于 Web 根目录之外；默认使用 `server/` |
-| `UPLOAD_MAX_FILE_MB` | 单个上传文件上限，默认 100 MB |
-| `UPLOAD_TOTAL_QUOTA_MB` | 上传目录总容量上限，默认 1024 MB |
-| `UPLOAD_WINDOW_MINUTES` | 上传限流统计窗口，默认 60 分钟 |
-| `UPLOAD_LIMIT` | 管理账户在窗口内允许的上传次数，默认 10 次 |
-| `UPLOAD_CONCURRENCY` | 管理账户允许的并发上传数，默认 1 个 |
-| `UPLOAD_ARCHIVE_MAX_UNCOMPRESSED_MB` | ZIP 解压后总大小上限，默认 512 MB |
-| `UPLOAD_ARCHIVE_MAX_FILES` | ZIP 内文件数量上限，默认 1000 个 |
-| `UPLOAD_ARCHIVE_MAX_DEPTH` | ZIP 内目录最大层级，默认 10 层 |
-| `UPLOAD_ARCHIVE_MAX_RATIO` | ZIP 最大压缩比，默认 100 |
-| `UPLOAD_VIRUS_SCAN_COMMAND` | 病毒扫描程序路径；推荐使用 `clamscan`，未配置时拒绝 ZIP、7Z 和 RAR |
-| `UPLOAD_VIRUS_SCAN_ARGS` | 传给扫描程序的 JSON 字符串数组，文件路径会自动追加到末尾 |
-| `UPLOAD_SCAN_TIMEOUT_SECONDS` | 单次病毒扫描超时，默认 60 秒 |
-| `TRUST_PROXY_HOPS` | Express 信任的反向代理跳数；单层 Nginx 使用 `1` |
-| `SERVER_HEADERS_TIMEOUT_SECONDS` | Node HTTP 服务器接收完整请求头的超时，默认 15 秒 |
-| `SERVER_REQUEST_TIMEOUT_SECONDS` | Node HTTP 服务器处理完整请求的超时，默认 120 秒 |
-| `SECURITY_LOG_IP_KEY` | 来源 IP HMAC 脱敏密钥；生产环境至少 32 个字符，使用 `openssl rand -hex 32` 生成 |
-| `SECURITY_ALERT_WINDOW_MINUTES` | 登录失败、异常上传、5xx 和代理失败的统计窗口，默认 10 分钟 |
-| `SECURITY_ALERT_COOLDOWN_MINUTES` | 同类告警的静默时间，默认 30 分钟 |
-| `SECURITY_ALERT_LOGIN_FAILURES` | 窗口内触发暴力登录告警的失败次数，默认 10 次 |
-| `SECURITY_ALERT_UPLOAD_REJECTIONS` | 窗口内触发异常上传告警的拒绝次数，默认 5 次 |
-| `SECURITY_ALERT_SERVER_ERRORS` | 窗口内触发服务端错误告警的 5xx 次数，默认 5 次 |
-| `SECURITY_ALERT_PROXY_FAILURES` | 窗口内触发代理异常告警所需的最少失败次数，默认 10 次 |
-| `SECURITY_ALERT_PROXY_MIN_REQUESTS` | 计算代理失败率所需的最少上游请求样本，默认 10 次 |
-| `SECURITY_ALERT_PROXY_FAILURE_RATE_PERCENT` | 触发代理异常告警的失败率，默认 50% |
-| `SECURITY_DISK_MIN_FREE_MB` | 触发磁盘空间告警的剩余容量下限，默认 1024 MB |
-| `SECURITY_DISK_CHECK_MINUTES` | 磁盘剩余空间检查周期，默认 5 分钟 |
-| `SECURITY_ALERT_WEBHOOK_URL` | 当前生产服务器明确不配置，保持为空；应用只将告警写入 journald |
-| `SECURITY_ALERT_WEBHOOK_HOSTS` | 当前生产服务器保持为空；仅在未来启用 Webhook 时填写精确域名白名单 |
-| `SECURITY_ALERT_TIMEOUT_SECONDS` | Webhook 请求超时，默认 5 秒 |
-| `BACKUP_APP_ROOT` | 应用工作区路径；仅写入独立的 root 所有 `backup.env` |
-| `BACKUP_LOCAL_DIR` | 加密备份的本地暂存目录，必须位于 `APP_STORAGE_ROOT` 之外 |
-| `BACKUP_ENCRYPTION_KEY_FILE` | 32 字节备份密钥文件；只允许备份账户读取，不能放入仓库、`.env` 或备份包 |
-| `BACKUP_RETENTION_DAYS` | 本地加密备份保留天数，默认 14 天且始终保留最新一份 |
-| `BACKUP_REQUIRE_REPLICA` | 是否强制离机复制成功才判定备份成功；当前本机模式为 `false`，启用 OSS 等离机存储后必须为 `true` |
-| `BACKUP_REPLICA_COMMAND` | 离机复制程序的绝对路径，生产示例使用 `/usr/bin/rclone` |
-| `BACKUP_REPLICA_ARGS` | 离机复制参数 JSON 数组，必须包含 `{file}`，可使用 `{name}` |
-| `BACKUP_DRILL_LOG_DIR` | 月度恢复演练记录目录 |
-| `BACKUP_TAR_COMMAND` | tar 程序路径，生产环境使用 `/usr/bin/tar` |
-| `PORT` | Express 服务端口，默认 `8787` |
-| `NODE_ENV` | 设置为 `production` 时启用生产 Cookie 与缓存策略，并强制检查认证配置 |
-| `VITE_BILIBILI_SYNC_URL` | 覆盖默认的同源 `/api/bilibili/feed` 聚合接口地址 |
-| `VITE_BILIBILI_SPACE_URL` | 主站跳转到 Bilibili 个人空间的地址 |
-| `BILIBILI_UID` | 服务端同步的 Bilibili 用户 UID，默认 `1858510441` |
-| `BILIBILI_COOKIE` | 可选的服务端 Cookie，用于降低公开接口触发风控的概率 |
-| `BILIBILI_UPSTREAM_TIMEOUT_SECONDS` | Bilibili 单次上游请求超时，默认 8 秒 |
-| `BILIBILI_JSON_MAX_MB` | Bilibili JSON 上游响应上限，默认 2 MB |
-| `BILIBILI_IMAGE_MAX_MB` | 单张代理图片响应上限，默认 5 MB |
-| `BILIBILI_REDIRECT_LIMIT` | Bilibili 上游最大重定向次数，默认 3 次 |
-| `BILIBILI_IMAGE_CACHE_MB` | 图片内存缓存总容量，默认 32 MB |
-| `BILIBILI_IMAGE_CACHE_ENTRIES` | 图片内存缓存条目上限，默认 64 条 |
-| `PUBLIC_RATE_WINDOW_MINUTES` | 公开接口限流窗口，默认 10 分钟 |
-| `BILIBILI_FEED_RATE_LIMIT` | 单 IP 在窗口内允许的同步请求数，默认 60 次 |
-| `BILIBILI_IMAGE_RATE_LIMIT` | 单 IP 在窗口内允许的图片代理请求数，默认 180 次 |
-| `BILIBILI_FEED_CONCURRENCY` | 同步接口全局并发请求上限，默认 4 个 |
-| `BILIBILI_IMAGE_CONCURRENCY` | 图片代理全局并发请求上限，默认 8 个 |
-| `RESOURCE_DOWNLOAD_RATE_LIMIT` | 单 IP 在窗口内允许的资源下载请求数，默认 60 次 |
-| `RESOURCE_DOWNLOAD_CONCURRENCY` | 资源下载全局并发请求上限，默认 4 个 |
-| `RESOURCE_DOWNLOAD_MAX_MB` | 允许下载的单个资源大小上限，默认 100 MB |
-| `RESOURCE_DOWNLOAD_TIMEOUT_SECONDS` | 单次资源下载最长时间，默认 120 秒 |
+后台位于 `/admin`，包含工作概览、文章管理和二创资源管理。
 
-`VITE_` 开头的变量会在构建时进入前端代码，不能在其中保存 Cookie、Access Key 或签名密钥。
+| 环境 | 文章和资源元数据 | 上传文件 |
+| --- | --- | --- |
+| 本地开发默认 | `server/data/content.json` | `server/uploads/` |
+| 生产环境 | `$APP_STORAGE_ROOT/data/content.json` | `$APP_STORAGE_ROOT/uploads/` |
 
-使用隐藏输入的交互命令生成 Argon2id 密码哈希，并将输出写入服务器 `.env`：
+生产环境必须将 `APP_STORAGE_ROOT` 放在 Git 工作区之外。草稿不会由公开接口返回；上传目录也不提供静态访问，资源统一通过 `/api/resources/:id/download` 下载。
 
-```bash
-npm run security:hash-password
-```
-
-后台登录成功后只在浏览器中设置 `HttpOnly`、`SameSite=Strict` 会话 Cookie。前端不保存管理密码或长期令牌；写操作还需要匹配的 Origin 和 CSRF Token。会话默认空闲 30 分钟或登录 8 小时后失效，退出登录会立即吊销当前会话。
-
-后台登录按 IP 和管理账户分别限流，连续失败会触发指数退避，同时限制 Argon2id 验证并发数。管理写接口按会话限制请求频率和并发数，JSON 请求体上限为 512 KB。安全日志使用单行 JSON，记录请求 ID、来源 IP 的 HMAC 标识、事件和结果，不记录密码、Cookie、CSRF Token、Authorization Header、文章标题或正文。日志覆盖登录、会话吊销、文章增删改和资源上传删除；暴力登录、异常上传、持续 `5xx`、Bilibili 代理失败和低磁盘空间会触发带冷却时间的告警。
-
-当前生产服务器不配置 `SECURITY_ALERT_WEBHOOK_URL` 和 `SECURITY_ALERT_WEBHOOK_HOSTS`。告警以 `security_alert` JSON 写入标准错误并由 journald 保存，不进行 Webhook 外发；维护者需要按部署文档定期检查日志。代码保留可选 Webhook 能力，但不属于当前生产部署方案。生产日志的采集、权限和保留策略见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
-
-## 备份与恢复
-
-`npm run backup:create` 会备份文章数据、上传资源和服务端 `.env`，使用 AES-256-GCM 认证加密并生成 SHA-256 校验文件。当前生产环境暂时采用本机模式，备份成功不要求离机复制；该模式无法应对整机损坏或服务器失陷，风险已经记录并接受。启用 OSS 等外部存储后，必须同时复制加密文件和校验文件，任何离机复制失败都应使备份任务失败。[backup.env.example](deploy/backup.env.example) 是启用离机副本时的配置模板，不能由应用账户修改。`npm run backup:restore` 只允许恢复到空目录且拒绝覆盖现有环境文件；`npm run backup:drill` 在临时目录执行完整恢复、逐文件校验和资源一致性检查，并保存演练记录。定时任务、密钥隔离、离机存储和恢复步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
-
-Alibaba Cloud Linux 3 可直接运行一键安装脚本：
-
-```bash
-sudo bash deploy/setup-alinux3-backup.sh
-```
-
-脚本会按照 `.nvmrc` 自动安装独立且经过校验的 Node.js 运行时，不会覆盖系统现有版本；同时允许暂不配置 OSS，完成本机加密备份、隔离权限、systemd 定时器、首份备份和首次恢复演练。当前生产环境已按本机模式通过 3.10 验收，并接受整机损坏或服务器失陷时无法保留副本的风险。具备外部存储条件后重新运行脚本并选择启用 OSS，即可增加离机副本。
-
-仓库提供敏感文件提交前检查。首次克隆后启用 Git Hook：
-
-```bash
-git config core.hooksPath .githooks
-npm run security:secrets
-```
-
-## 内容管理
-
-后台包含工作概览、文章管理和二创资源三个页面。
-
-文章支持：
-
-- 新建、编辑和删除
-- Markdown 实时预览
-- 保存草稿或公开发布
-- 标题、分类、摘要、日期、阅读时间、封面和强调色设置
-
-二创资源支持 MID、MIDI、WAV、MP3、FLAC、ZIP、7Z、RAR、PNG、JPG、JPEG、WebP、PDF、PSD 和 TXT。服务端会联合检查扩展名、浏览器 MIME 和文件签名，拒绝高风险双扩展名；ZIP 还会检查文件数、解压大小、压缩比、目录层级、嵌套压缩包、可执行文件、加密内容和符号链接。服务端不会自动解压上传的压缩包。
-
-生产环境应安装并更新 ClamAV，将 `UPLOAD_VIRUS_SCAN_COMMAND` 设置为 `clamscan` 或其绝对路径。配置扫描器后，文件只有在同步扫描成功后才会写入公开资源列表；扫描器缺失或不可用时，ZIP、7Z 和 RAR 会默认拒绝。上传同时受到单文件大小、总容量、频率和并发限制。
-
-后台文章元数据保存在 `server/data/content.json`，上传文件保存在 `server/uploads/`。草稿不会通过公开接口返回。文章和资源表单会按统一 Schema 校验类型、长度和枚举值，并拒绝未知字段。内容写入携带版本号；当其他页面已先完成保存时，旧页面会收到冲突提示并刷新列表，不会静默覆盖新内容。
-
-## Markdown 文章
-
-文章统一通过 `/admin` 后台使用 Markdown 编写，支持实时预览、草稿和发布。文章数据保存在 `server/data/content.json`，主站通过 `/api/content` 读取已发布内容，草稿不会公开显示。
-
-Markdown 渲染结果会经过 DOMPurify 清理，主站和后台预览共用固定的标签、属性及 URL 协议白名单。文章封面仅接受站内 `/images/` 路径，或 `ARTICLE_IMAGE_HOSTS` 明确允许的 HTTPS 域名。API 不可用或没有已发布文章时，主站显示空状态。
-
-## 二创资源
-
-二创资源统一通过 `/admin` 后台上传。文件使用服务端随机名存放在 `server/uploads/`，元数据写入 `server/data/content.json`；也可以通过 `APP_STORAGE_ROOT` 将两者放入独立持久化目录。存储目录不提供静态访问，下载统一经过 `/api/resources/:id/download`，强制使用附件模式、`nosniff` 和 UTF-8 文件名。删除操作先隔离磁盘文件，再提交元数据并记录安全审计事件。没有资源时主站显示空状态。
+文章使用 Markdown 编写，主站和后台预览共用 DOMPurify 白名单。二创资源支持 MID、MIDI、WAV、MP3、FLAC、ZIP、7Z、RAR、PNG、JPG、JPEG、WebP、PDF、PSD 和 TXT。服务端检查扩展名、MIME、文件签名和压缩包结构；生产环境使用 ClamAV 同步扫描高风险压缩格式。
 
 ## Bilibili 同步
 
-主站默认读取同源 `/api/bilibili/feed`。Express 服务端通过 WBI 签名接口获取 `BILIBILI_UID` 对应的全部空间投稿，同时提取最近三条动态，并将结果缓存 10 分钟。视频封面通过同源 `/api/bilibili/image` 代理，按需获取 `960 x 540` WebP 缩略图，并使用受限的服务端内存缓存和浏览器长期缓存，避免 Bilibili 图片防盗链及原图过大导致加载缓慢。浏览器不会直接请求 Bilibili。
+主站默认读取同源 `/api/bilibili/feed`，服务端负责 WBI 请求、动态聚合、图片代理、缓存、超时、响应大小限制和 SSRF 防护。浏览器不会直接携带 Bilibili Cookie。
 
-图片代理仅允许固定的 Bilibili 图片主机和 HTTPS 默认端口。服务端在每次重定向前重新验证 URL 与 DNS 解析结果，并将通过检查的公网地址固定到实际 TLS 请求，阻止私网、环回、链路本地、开放重定向及 DNS 重绑定。同步、图片和下载接口分别限制请求频率、全局并发、响应大小与超时；相同图片和同步请求会复用正在进行的上游请求。
+数据中心 IP 遇到 Bilibili `412` 时，可在服务端 `.env` 设置 `BILIBILI_COOKIE` 后重启应用。该变量不能添加 `VITE_` 前缀，也不能提交到 Git。
 
-`/api/bilibili/cache-stats` 提供不含敏感信息的缓存指标，包括命中、未命中、合并请求、淘汰次数、当前条目和内存占用。图片响应的 `X-Image-Cache` 与同步响应的 `X-Feed-Cache` 会返回 `HIT`、`MISS` 或 `COALESCED`。
+## Alibaba Cloud Linux 4
 
-Bilibili 可能对数据中心 IP 返回 `412` 风控页面。遇到这种情况，可以在 `.env` 的 `BILIBILI_COOKIE` 中配置有效的服务端 Cookie 后重启服务。该变量不能添加 `VITE_` 前缀，也不要提交到 Git。
-
-接口响应格式：
-
-```json
-{
-  "syncedAt": "2026-09-26T14:20:00+08:00",
-  "videos": [
-    {
-      "id": "BV...",
-      "title": "视频标题",
-      "stats": "12.8万播放 · 902弹幕",
-      "date": "2026-09-26",
-      "cover": "https://i0.hdslb.com/...",
-      "duration": "04:12"
-    }
-  ],
-  "dynamics": [
-    {
-      "id": "动态 ID",
-      "time": "2026-09-26",
-      "text": "动态正文",
-      "topic": "#话题"
-    }
-  ]
-}
-```
-
-同步成功后，首页视频、视频档案和“此刻动态”都会使用真实内容。视频与动态分别通过 `videoUnavailable`、`dynamicUnavailable`、`videoStale` 和 `dynamicStale` 标记同步状态，单项失败不会影响另一项。页面不会使用本地示例视频或动态。
-
-## 图片优化
-
-将原始 JPG 图片放入 `public/images/` 后运行：
+全新服务器优先使用 [Alibaba Cloud Linux 4 完整安装说明](deploy/INSTALL_ALINUX4.md)。安装器配置固定版本 Node.js、ClamAV、Nginx HTTPS、systemd、端口隔离、本机加密备份和恢复演练。
 
 ```bash
-npm run optimize:images
+sudo bash deploy/install-alinux4.sh
 ```
 
-脚本会生成 `640px` 和 `1600px` 两档 WebP。主站通过 `srcset` 为不同设备选择尺寸。
+安装器还提供受限的密码阶段恢复和显式完整重装：
 
-## 构建与部署
+```bash
+sudo bash deploy/install-alinux4.sh --resume
+sudo bash deploy/install-alinux4.sh --reinstall
+```
 
-Alibaba Cloud Linux 4 全新服务器可使用 [完整安装脚本及说明](deploy/INSTALL_ALINUX4.md)，自动配置运行环境、应用、Nginx HTTPS、上传扫描及本机加密备份。
+`--resume` 只接受文档规定的特定中断状态。`--reinstall` 会在固定确认短语后永久删除本站数据、配置、备份和专用账户；执行前必须完成离机备份。
+
+安装成功后服务会自动启动：
+
+```bash
+sudo systemctl status vocaloid-producer-blog nginx vpb-port-guard
+sudo journalctl -u vocaloid-producer-blog -n 100 --no-pager
+```
+
+## 手动构建
+
+以下命令用于本地验证或自定义部署，不替代生产 systemd、HTTPS、防火墙和备份配置：
 
 ```bash
 npm ci
@@ -305,122 +106,80 @@ npm run verify:build
 npm start
 ```
 
-`npm ci` 严格按锁文件安装依赖。`npm run verify:reproducible` 连续构建两次并比较全部文件的 SHA-256，成功后在 `dist/` 留下生产产物。`dist/build-info.json` 记录完整 Git 提交 SHA 和构建时工作区状态；`npm run verify:build` 只接受来自当前提交且工作区干净的产物。`npm start` 启动 Express，并在同一端口提供 API、受控资源下载和构建后的单页应用。当前服务监听所有网卡的 `8787` 端口，生产环境必须通过云安全组和主机防火墙阻止公网直连。
+`npm start` 在前台启动 Express，并在 `8787` 端口提供 API、受控下载和构建后的单页应用。生产环境必须阻止公网直连该端口。反向代理、systemd、日志、发布和回滚步骤见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。
 
-生产构建必须从干净的 Git 检出执行。运行时数据应通过 `APP_STORAGE_ROOT` 放在仓库外，避免 `server/data/content.json` 的生产修改污染构建来源。发布预构建产物时，应将部署记录中的提交传给校验命令：
+## 备份与恢复
 
-```bash
-DEPLOY_COMMIT=完整的40位Git提交SHA npm run verify:build
-```
+`npm run backup:create` 创建包含文章、上传资源和服务端 `.env` 的 AES-256-GCM 加密备份；`backup:restore` 仅恢复到空目录；`backup:drill` 执行完整恢复演练。
 
-生产环境要求：
-
-- 设置 `NODE_ENV=production`、正确的 `APP_ORIGIN` 和 `ADMIN_PASSWORD_HASH`
-- 使用 Nginx、Caddy 或其他反向代理提供 HTTPS、强制 CSP 和安全响应头
-- 云安全组和主机防火墙禁止公网访问 Express 的 `PORT`
-- 使用 `APP_STORAGE_ROOT` 将生产数据放在 Git 工作区之外，并独立备份
-- 部署前验证 `dist/build-info.json`，部署后通过公开接口核对同一提交 SHA
-- `main` 只允许通过 Pull Request 合并，并要求安全构建与 CodeQL 检查成功
-
-不要只部署 `dist/`：纯静态部署可以浏览内置内容，但后台、动态文章和上传资源 API 将不可用。
-
-### 反向代理示例
-
-生产部署由 Express 同时提供 `dist`、SPA 回退和 API，Nginx 应将页面与 `/api/` 请求全部代理到 Express，不要再为同一站点增加独立的 `try_files ... /index.html` 回退。否则 API 路由可能错误返回 HTML，并在后台表现为 `Unexpected token '<'`。
-
-完整的 Nginx 限流、TLS、安全响应头、CSP、systemd、发布和回滚配置见 [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)。下面只保留最小路由结构：
-
-```nginx
-location /api/admin/ {
-    client_max_body_size 101m;
-    proxy_pass http://127.0.0.1:8787;
-    proxy_send_timeout 120s;
-    proxy_read_timeout 120s;
-}
-
-location /api/ {
-    proxy_pass http://127.0.0.1:8787;
-}
-
-location /uploads/ {
-    return 404;
-}
-
-location / {
-    proxy_pass http://127.0.0.1:8787;
-}
-```
-
-所有代理位置还必须传递 `Host`、`X-Forwarded-For` 和 `X-Forwarded-Proto`，并配置合理的连接与读取超时。后台出现 `Unexpected token '<'` 时，先检查 `/api/` 是否被 SPA 回退规则接管：
+Alibaba Cloud Linux 3 的以下脚本只配置既有网站的备份系统，不安装网站本身：
 
 ```bash
-curl -i https://你的域名/api/health
+sudo bash deploy/setup-alinux3-backup.sh
 ```
 
-正常响应的 `Content-Type` 应为 `application/json`，正文为 `{"ok":true}`。
+Alibaba Cloud Linux 4 完整安装器已经包含备份配置。本机备份不能应对整机丢失或服务器失陷，生产环境应保存离线密钥并配置经过验证的离机副本。
 
-### 生产发布门禁
+## 发布门禁
 
-Alibaba Cloud Linux 3 上每次生产发布必须先读取当前线上 `/build-info.json` 的完整提交 SHA，然后执行统一门禁：
+发布门禁不依赖特定 Linux 版本。部署前传入当前线上完整提交 SHA：
 
 ```bash
 CURRENT_DEPLOY_COMMIT=当前线上完整提交SHA npm run release:preflight
 ```
 
-门禁会拒绝脏工作区，先对当前生产边界执行只读冒烟检查，再运行依赖审计、敏感文件扫描、全部安全测试、双构建和构建来源验证。只有命令返回 `0` 才能重启服务。部署后执行：
+部署后验证候选提交：
 
 ```bash
 DEPLOY_COMMIT=$(git rev-parse HEAD) npm run release:verify
 ```
 
-发布后门禁只访问公开只读接口，不携带管理密码、Cookie、CSRF Token 或 Bilibili Cookie，也不执行登录、上传和内容写入。它会验证 HTTPS、响应头、线上构建提交、缓存指标和公网 `8787` 隔离；失败时本次发布不算完成，必须按生产手册回滚。
+门禁会检查干净工作区、供应链、敏感文件、安全测试、可复现构建、构建来源和生产公开边界。失败时不得继续或确认发布完成。
 
-## 验证命令
+## 常用验证
 
 ```bash
-npm run build          # 生产构建
-npm run audit:ui       # 桌面、平板和手机界面审计
-npm run test:auth      # 后台认证与限流集成测试
-npm run test:uploads   # 上传、扫描、下载与删除安全集成测试
-npm run test:public    # SSRF、重定向、响应上限和超时安全测试
-npm run test:content   # 内容 Schema、版本冲突与 Markdown XSS 测试
-npm run test:monitoring # 安全日志、告警阈值和敏感字段测试
-npm run test:backup     # 加密备份、完整性校验和恢复测试
-npm run test:smoke      # 生产冒烟检查器的成功与拒绝路径测试
-npm run smoke:production # 对生产公开边界执行只读冒烟检查，必须设置 DEPLOY_COMMIT
-npm run security:supply-chain # 精确版本、锁文件、许可证、弃用和来源检查
-npm run verify:reproducible   # 双构建文件哈希一致性检查
-npm run verify:build          # 构建产物 Git SHA 与工作区状态检查
+npm run build
+npm run audit:ui
+npm run test:auth
+npm run test:uploads
+npm run test:public
+npm run test:content
+npm run test:monitoring
+npm run test:backup
+npm run test:deploy
+npm run test:smoke
+npm run security:supply-chain
 npm run security:secrets
 npm audit --audit-level=high --registry=https://registry.npmjs.org
-npm run optimize:images
 ```
 
-`audit:ui` 使用本机 Microsoft Edge，截图保存在 `.screenshots/`，并检查横向溢出、控制台错误、后台粘性导航和切页滚动位置。
+生产只读冒烟检查还需要设置 `DEPLOY_COMMIT` 后执行 `npm run smoke:production`。`audit:ui` 使用本机 Microsoft Edge，截图写入 `.screenshots/`。
 
-## 供应链安全
+首次克隆后可启用仓库提供的提交前敏感文件检查：
 
-项目固定 Node.js 主版本、npm 版本及所有直接依赖版本，并提交 npm v3 锁文件。`.npmrc` 固定使用官方 registry；已弃用的 `lucide-vue-next` 已替换为 `@lucide/vue`。许可证白名单、弃用标记、包来源和完整性字段由 `security:supply-chain` 检查。
+```bash
+git config core.hooksPath .githooks
+```
 
-GitHub Actions 对每次 `main` 推送和 Pull Request 执行 `npm ci`、完整依赖审计、敏感文件检查、全部安全测试、双构建一致性检查及构建来源验证。CodeQL 额外执行 JavaScript/TypeScript 扩展安全查询，Dependabot 每周检查 npm 依赖、每月检查 Actions。所有 Actions 均固定到完整提交 SHA。
+## 文档
 
-在 GitHub 分支保护中要求所有修改通过 Pull Request，并将 `Security and reproducible build / verify` 和 `CodeQL / analyze` 设置为 `main` 的必需检查，使新增高危漏洞或静态分析失败直接阻止合并。CI 产物名称包含提交 SHA，并保留 14 天。Dependabot PR 不能自动视为安全升级，仍需检查破坏性变更、测试结果和对现有安全边界的影响。
+- [CONFIGURATION.md](CONFIGURATION.md)：应用及备份环境变量
+- [deploy/INSTALL_ALINUX4.md](deploy/INSTALL_ALINUX4.md)：Alibaba Cloud Linux 4 安装、恢复和重装
+- [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)：生产部署、备份、发布和回滚
+- [SECURITY_ROADMAP.md](SECURITY_ROADMAP.md)：安全阶段、控制措施和验证证据
 
 ## 项目结构
 
 ```text
-public/                 静态图片等公开资源
-scripts/                图片优化与界面审计脚本
-server/
-  data/content.json     后台文章和资源元数据
-  uploads/              后台上传文件
-  index.js              Express API 与生产静态服务
-src/
-  services/             后台 API 与 Bilibili 同步客户端
-  AdminApp.vue          管理后台
-  App.vue               主站
-PRODUCTION_DEPLOYMENT.md 生产部署、安全验收与回滚手册
-SECURITY_ROADMAP.md      安全阶段状态、证据与后续目标
+public/                  公开图片资源
+src/                     Vue 主站和管理界面
+server/                  Express API、安全模块及开发默认数据
+scripts/                 测试、构建验证、备份和运维工具
+deploy/                  安装器、发布门禁和 systemd 单元
+CONFIGURATION.md         环境变量参考
+PRODUCTION_DEPLOYMENT.md 生产部署与回滚手册
+SECURITY_ROADMAP.md      安全路线图与证据
 ```
 
 ## 开源协议

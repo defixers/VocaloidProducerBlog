@@ -49,5 +49,5 @@ run_postdeploy_gate() {
 case "${1:-}" in
   pre) run_predeploy_gate ;;
   post) run_postdeploy_gate ;;
-  *) fail "Usage: bash deploy/release-gate-alinux3.sh <pre|post>" ;;
+  *) fail "Usage: bash deploy/release-gate.sh <pre|post>" ;;
 esac
