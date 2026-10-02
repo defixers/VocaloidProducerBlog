@@ -30,7 +30,18 @@ const nav = [
   { id: 'assets', label: '素材库' },
 ]
 
-const articleTypes = computed(() => ['全部', ...new Set(articles.value.map((article) => article.type).filter(Boolean))])
+// 筛选顺序按文章数量降序、同数量按名称，保证「发布新分类的文章不会让筛选栏次序改变」
+const articleTypes = computed(() => {
+  const counts = new Map()
+  for (const article of articles.value) {
+    if (!article.type) continue
+    counts.set(article.type, (counts.get(article.type) || 0) + 1)
+  }
+  const types = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
+    .map(([type]) => type)
+  return ['全部', ...types]
+})
 
 const filteredArticles = computed(() => {
   const source = articleFilter.value === '全部' ? articles.value : articles.value.filter(a => a.type === articleFilter.value)
@@ -274,6 +285,17 @@ onMounted(async () => {
           <button class="primary-button small" @click="downloadAsset(asset)"><Check v-if="downloaded === asset.id" :size="17"/><Download v-else :size="17"/>{{ downloaded === asset.id ? '已加入下载' : '下载' }}</button>
         </div>
         <p v-if="!assets.length" class="empty-state">暂无可下载素材。</p>
+      </section>
+    </main>
+
+    <main v-else class="listing-page">
+      <section class="page-head section-wrap">
+        <span class="eyebrow">404 / NOT FOUND</span>
+        <h1>这里什么都没有</h1>
+        <p>你要找的页面不存在，或者已经搬走了。可以从上面的导航，或者下面的按钮回到站内其它区域。</p>
+      </section>
+      <section class="section-wrap empty-state">
+        <button class="primary-button" @click="go('home')">回到首页</button>
       </section>
     </main>
 

@@ -6,6 +6,33 @@
     <meta name="theme-color" content="#19221f" />
     <link rel="icon" type="image/webp" href="/images/avatar-640.webp" />
     <meta name="description" content="Utopia_乌托邦P - 中文 Synthesizer V 原创音乐作者作品档案" />
+    <!-- 首屏大图：不 preload 的话要等 JS 执行、Vue 挂载之后才开始下载，直接拖慢 LCP -->
+    <link
+      rel="preload"
+      as="image"
+      href="/images/anti-utopia-1600.webp"
+      imagesrcset="/images/anti-utopia-640.webp 640w, /images/anti-utopia-1600.webp 1600w"
+      imagesizes="100vw"
+      fetchpriority="high"
+    />
+    <!-- 社交分享卡片。og:url / og:image 用根相对地址：绝大多数平台（微信/QQ/B 站等）能正确解析，
+         且不必在仓库里写死生产域名。若将来需要绝对地址（部分平台要求），
+         可加 VITE_SITE_URL 环境变量后改成绝对地址；注意 Vite 对未定义的变量不会替换而是原样输出，
+         所以不能直接写占位符，否则会把坏值发到线上。 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="UTOPIA_乌托邦P" />
+    <meta property="og:title" content="Utopia_乌托邦P / 创作档案" />
+    <meta property="og:description" content="写摇滚，也写少年、现实与并不存在的好地方。中文 Synthesizer V 原创音乐作品档案。" />
+    <meta property="og:image" content="/images/anti-utopia-1600.webp" />
+    <meta property="og:url" content="/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Utopia_乌托邦P / 创作档案" />
+    <meta name="twitter:description" content="写摇滚，也写少年、现实与并不存在的好地方。中文 Synthesizer V 原创音乐作品档案。" />
+    <meta name="twitter:image" content="/images/anti-utopia-1600.webp" />
+    <!-- 这里必须写绝对地址：Vite 的 build-html 插件会把 <link href> 当作待构建资源去解析，
+         写根相对（href="/"）会被解析成目录并抛 EISDIR 直接构建失败。
+         与 og:url / og:image 不同，<meta content> 不参与资源解析，所以那几项可用相对地址。 -->
+    <link rel="canonical" href="https://www.utopiap.top/" />
     <title>Utopia_乌托邦P / 创作档案</title>
   </head>
   <body>
