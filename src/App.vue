@@ -1,16 +1,22 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
-  ArrowDownToLine, ArrowRight, Box, Check, ChevronRight, CirclePlay, Clock3,
-  Download, ExternalLink, Menu, Music2,
+  ArrowDownToLine, ArrowRight, ArrowUp, Box, Check, ChevronRight, CirclePlay, Clock3,
+  Copy, Download, ExternalLink, Mail, Menu, Music2,
   Play, Search, Sparkles, X, Zap
 } from '@lucide/vue'
 import { fetchBilibiliFeed } from './services/bilibili'
 import { renderMarkdown } from './security/markdown.js'
 
+const contactEmail = '2811077500@qq.com'
+const contactQq = '2811077500'
+const copyState = ref('idle')
+let copyResetTimer
+
 const activeSection = ref('home')
 const activeArticle = ref(null)
 const searchOpen = ref(false)
+const contactOpen = ref(false)
 const query = ref('')
 const menuOpen = ref(false)
 const downloaded = ref(null)
@@ -55,6 +61,42 @@ function go(section) {
   activeArticle.value = null
   menuOpen.value = false
   window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function openContact() {
+  copyState.value = 'idle'
+  contactOpen.value = true
+}
+
+function closeContact() {
+  contactOpen.value = false
+}
+
+// 复制失败时的降级：选中输入框内容，提示手动复制
+async function copyEmail() {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(contactEmail)
+    } else {
+      throw new Error('clipboard unavailable')
+    }
+    copyState.value = 'copied'
+  } catch {
+    const field = document.querySelector('.contact-value')
+    field?.focus()
+    field?.select?.()
+    copyState.value = 'manual'
+  }
+  clearTimeout(copyResetTimer)
+  copyResetTimer = setTimeout(() => { copyState.value = 'idle' }, 2600)
+}
+
+function handleKeydown(event) {
+  if (event.key === 'Escape' && contactOpen.value) closeContact()
 }
 
 function openArticle(article) {
@@ -115,6 +157,12 @@ onMounted(async () => {
     videoSyncState.value = '同步暂不可用'
     dynamicSyncState.value = '同步暂不可用'
   }
+})
+
+onMounted(() => window.addEventListener('keydown', handleKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  clearTimeout(copyResetTimer)
 })
 </script>
 
@@ -280,9 +328,44 @@ onMounted(async () => {
     <footer>
       <div class="footer-brand"><span class="brand-mark"><Zap :size="16" fill="currentColor" /></span><strong>UTOPIA_乌托邦P</strong></div>
       <p>至少我还在为你而歌唱。</p>
-      <div><button @click="go('articles')">文章</button><button @click="go('videos')">视频</button><button @click="go('assets')">素材</button><a href="mailto:2811077500@qq.com">合作联系</a></div>
+      <!-- 这里不再重复顶部导航已有的文章/视频/素材入口，改为页脚特有的功能 -->
+      <div class="footer-actions">
+        <button @click="scrollToTop"><ArrowUp :size="14" /> 回到顶部</button>
+        <a :href="bilibiliSpaceUrl" target="_blank" rel="noreferrer">B 站主页 <ExternalLink :size="13" /></a>
+        <button @click="openContact"><Mail :size="14" /> 合作联系</button>
+      </div>
       <small>© 2026 UTOPIA_P. OFFICIAL WEBSITE.</small>
     </footer>
+
+    <div v-if="contactOpen" class="search-modal" role="dialog" aria-modal="true" aria-label="合作联系" @click.self="closeContact">
+      <div class="search-dialog contact-dialog">
+        <button class="close-search" aria-label="关闭" @click="closeContact"><X /></button>
+        <span class="eyebrow">CONTACT / 合作联系</span>
+        <h2>聊聊合作</h2>
+        <p class="contact-note">翻调授权、编曲合作、转载与商用咨询都可以发邮件。邮件较多时回复会慢一些，见谅。</p>
+        <label class="contact-field">
+          <span>邮箱</span>
+          <input class="contact-value" :value="contactEmail" readonly @focus="$event.target.select()" />
+        </label>
+        <label class="contact-field">
+          <span>QQ</span>
+          <input class="contact-value" :value="contactQq" readonly @focus="$event.target.select()" />
+        </label>
+        <div class="contact-actions">
+          <button class="primary-button" @click="copyEmail">
+            <Check v-if="copyState === 'copied'" :size="17" />
+            <Copy v-else :size="17" />
+            {{ copyState === 'copied' ? '已复制邮箱' : '复制邮箱' }}
+          </button>
+          <a class="contact-mailto" href="mailto:2811077500@qq.com">用邮件客户端打开</a>
+        </div>
+        <p class="contact-hint" role="status" aria-live="polite">
+          <template v-if="copyState === 'copied'">已复制到剪贴板。</template>
+          <template v-else-if="copyState === 'manual'">自动复制不可用，已选中邮箱，请手动复制（Ctrl/Cmd + C）。</template>
+          <template v-else>复制后可直接粘贴到邮件、QQ 或表单里。</template>
+        </p>
+      </div>
+    </div>
 
     <div v-if="searchOpen" class="search-modal" @click.self="searchOpen = false">
       <div class="search-dialog">
