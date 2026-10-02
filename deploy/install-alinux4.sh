@@ -63,7 +63,10 @@ require_resume_state() {
     && -d "$STORE/uploads" && ! -L "$STORE/uploads" ]] || fail 'Cannot resume: initial application data is incomplete or unsafe.'
   [[ -d "$CONFIG" && ! -L "$CONFIG" && -f "$CONFIG/fullchain.pem" && ! -L "$CONFIG/fullchain.pem" \
     && -f "$CONFIG/privkey.pem" && ! -L "$CONFIG/privkey.pem" ]] || fail 'Cannot resume: installed TLS files are incomplete or unsafe.'
-  for target in "$APP/.env" "$BACKUPS" /opt/vocaloid-producer-blog-backup "$CLAMAV_DATABASE" \
+  if [[ -e "$CLAMAV_DATABASE" || -L "$CLAMAV_DATABASE" ]]; then
+    [[ -d "$CLAMAV_DATABASE" && ! -L "$CLAMAV_DATABASE" ]] || fail "Cannot resume: unsafe ClamAV database path: $CLAMAV_DATABASE"
+  fi
+  for target in "$APP/.env" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
     "$STORE/drills" "$CONFIG/freshclam.conf" "$CONFIG/backup.key" "$CONFIG/backup.env" \
     /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
     /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
