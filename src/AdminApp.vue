@@ -6,6 +6,7 @@ import {
 } from '@lucide/vue'
 import { createAdminApi, loginAdmin, logoutAdmin, restoreAdminSession } from './services/admin.js'
 import { renderMarkdown } from './security/markdown.js'
+import { formatBytes, SIZE_ONLY_META } from './utils/formatBytes.js'
 
 const loginPassword = ref('')
 const authenticated = ref(false)
@@ -324,14 +325,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
         <section class="upload-panel">
           <div class="upload-heading"><Upload :size="22"/><div><h2>上传新资源</h2><p>最大 100 MB，支持 MIDI、音频、压缩包、图片、PDF 和 PSD。</p></div></div>
           <form @submit.prevent="uploadResource">
-            <label class="file-drop" for="resource-file"><input id="resource-file" ref="resourceFileInput" type="file" required @change="selectFile"/><Upload :size="24"/><b>{{ uploadFile?.name || '选择文件' }}</b><span>{{ uploadFile ? `${Math.ceil(uploadFile.size / 1024)} KB` : '点击浏览本地文件' }}</span></label>
-            <div class="resource-fields"><label>显示名称<input v-model="resourceForm.name" required placeholder="例如：《歌曲名》人声 MIDI"/></label><label>标签<input v-model="resourceForm.tag" /></label><label>补充说明<input v-model="resourceForm.meta" placeholder="格式、版本或使用范围"/></label></div>
+            <label class="file-drop" for="resource-file"><input id="resource-file" ref="resourceFileInput" type="file" required @change="selectFile"/><Upload :size="24"/><b>{{ uploadFile?.name || '选择文件' }}</b><span>{{ uploadFile ? formatBytes(uploadFile.size) : '点击浏览本地文件' }}</span></label>
+            <div class="resource-fields"><label>显示名称<input v-model="resourceForm.name" required placeholder="例如：《歌曲名》人声 MIDI"/></label><label>标签<input v-model="resourceForm.tag" /></label><label>补充说明<input v-model="resourceForm.meta" placeholder="格式、版本或使用范围，可留空"/></label></div>
             <button class="save-command" type="submit" :disabled="loading"><Upload :size="17"/>上传并公开</button>
           </form>
         </section>
         <section class="resource-list">
           <div class="section-row-title"><h2>已上传资源</h2><span>{{ resources.length }} FILES</span></div>
-          <div v-for="resource in resources" :key="resource.id" class="resource-row"><span class="file-mark"><FolderDown :size="19"/></span><div><b>{{ resource.name }}</b><small>{{ resource.meta }} · {{ Math.ceil(resource.size / 1024) }} KB</small></div><span class="status-chip published">{{ resource.tag }}</span><a :href="resource.downloadUrl" :download="resource.downloadName" title="下载"><FolderDown :size="17"/></a><button class="danger" title="删除" @click="removeResource(resource)"><Trash2 :size="17"/></button></div>
+          <div v-for="resource in resources" :key="resource.id" class="resource-row"><span class="file-mark"><FolderDown :size="19"/></span><div><b>{{ resource.name }}</b><small>{{ formatBytes(resource.size) }}<template v-if="resource.meta && !SIZE_ONLY_META.test(resource.meta)"> · {{ resource.meta }}</template></small></div><span class="status-chip published">{{ resource.tag }}</span><a :href="resource.downloadUrl" :download="resource.downloadName" title="下载"><FolderDown :size="17"/></a><button class="danger" title="删除" @click="removeResource(resource)"><Trash2 :size="17"/></button></div>
           <div v-if="!resources.length" class="admin-empty"><FolderDown :size="30"/><p>还没有通过后台上传的资源。</p></div>
         </section>
       </div>
