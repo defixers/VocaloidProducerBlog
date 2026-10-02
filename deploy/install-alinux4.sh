@@ -14,6 +14,8 @@ WORK=''
 CLAMSCAN_BIN=''
 FRESHCLAM_BIN=''
 RESUME=false
+REINSTALL=false
+REINSTALL_STARTED=false
 ADMIN_PASSWORD=''
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[install] %s\n' "$*"; }
@@ -21,7 +23,14 @@ cleanup() {
   if [[ "$WORK" == /tmp/vpb-install.* && -d "$WORK" ]]; then rm -rf -- "$WORK"; fi
 }
 trap cleanup EXIT
-trap 'printf "Installation stopped at line %s. Correct the error before continuing; existing data has not been reset.\n" "$LINENO" >&2' ERR
+on_error() {
+  if [[ "$REINSTALL_STARTED" == true ]]; then
+    printf 'Installation stopped at line %s after reinstallation cleanup began; the installation may be partial. Correct the error, then run --reinstall again.\n' "$1" >&2
+  else
+    printf 'Installation stopped at line %s. Correct the error before continuing; existing data has not been reset.\n' "$1" >&2
+  fi
+}
+trap 'on_error "$LINENO"' ERR
 
 prompt() {
   local key="$1" label="$2" fallback="${3:-}" value
@@ -31,10 +40,13 @@ prompt() {
 }
 
 parse_args() {
-  [[ $# -le 1 ]] || fail 'Usage: sudo bash deploy/install-alinux4.sh [--resume]'
+  [[ $# -le 1 ]] || fail 'Usage: sudo bash deploy/install-alinux4.sh [--resume|--reinstall]'
   if [[ $# == 1 ]]; then
-    [[ "$1" == --resume ]] || fail 'Usage: sudo bash deploy/install-alinux4.sh [--resume]'
-    RESUME=true
+    case "$1" in
+      --resume) RESUME=true ;;
+      --reinstall) REINSTALL=true ;;
+      *) fail 'Usage: sudo bash deploy/install-alinux4.sh [--resume|--reinstall]' ;;
+    esac
   fi
 }
 
@@ -54,6 +66,116 @@ prompt_admin_password() {
     printf 'Passwords do not match. Try again.\n' >&2
   done
   confirmation=''
+}
+
+require_fresh_state() {
+  local target account
+  for target in "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
+    /var/lib/vpb /var/lib/vpb-build /var/lib/vpb-backup /var/lib/vpb-clamav \
+    /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
+    /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
+    /etc/systemd/system/vpb-freshclam.timer /etc/systemd/system/vocaloid-producer-blog-backup.service \
+    /etc/systemd/system/vocaloid-producer-blog-backup.timer \
+    /etc/systemd/system/vocaloid-producer-blog-restore-drill.service \
+    /etc/systemd/system/vocaloid-producer-blog-restore-drill.timer /etc/vpb-port-guard.nft; do
+    [[ ! -e "$target" && ! -L "$target" ]] || fail "Existing installation target: $target. Use --reinstall only if all site data may be deleted."
+  done
+  for account in vpb vpb-build vpb-backup vpb-clamav; do
+    ! id "$account" >/dev/null 2>&1 || fail "Account already exists: $account"
+  done
+}
+
+require_reinstall_state() {
+  local target found=false
+  for target in "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
+    /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
+    /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
+    /etc/vpb-port-guard.nft; do
+    if [[ -e "$target" || -L "$target" ]]; then found=true; break; fi
+  done
+  [[ "$found" == true ]] || fail 'Cannot reinstall: no existing Vocaloid Producer Blog installation was found.'
+  for target in "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
+    /var/lib/vpb /var/lib/vpb-build /var/lib/vpb-backup /var/lib/vpb-clamav; do
+    [[ "$SOURCE/" != "$target/"* ]] || fail "Cannot reinstall from a source checkout that will be deleted: $SOURCE"
+  done
+}
+
+confirm_reinstall() {
+  local confirmation=''
+  printf '%s\n' \
+    'WARNING: --reinstall permanently deletes this site installation, including:' \
+    "  $APP" "  $STORE" "  $CONFIG" "  $BACKUPS" \
+    'It also deletes the site backup key, local backups, uploads and all four vpb service accounts.'
+  read -r -p 'Type DELETE ALL VPB DATA to continue: ' confirmation
+  [[ "$confirmation" == 'DELETE ALL VPB DATA' ]] || fail 'Reinstallation cancelled; confirmation text did not match.'
+  confirmation=''
+}
+
+reset_installation() {
+  local unit account version node_arch node_root
+  local -a units=(
+    vocaloid-producer-blog.service vpb-port-guard.service vpb-freshclam.service vpb-freshclam.timer
+    vocaloid-producer-blog-backup.service vocaloid-producer-blog-backup.timer
+    vocaloid-producer-blog-restore-drill.service vocaloid-producer-blog-restore-drill.timer
+  )
+  version="$(tr -d '\r\n' < "$SOURCE/.nvmrc")"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Invalid .nvmrc'
+  case "$(uname -m)" in
+    x86_64) node_arch=x64 ;;
+    aarch64) node_arch=arm64 ;;
+    *) fail 'Unsupported architecture' ;;
+  esac
+  node_root="/opt/vpb-node-$version-$node_arch"
+
+  WORK="$(mktemp -d /tmp/vpb-install.XXXXXXXX)"
+  install -o root -g root -m 0644 "$TLS_CERT" "$WORK/fullchain.pem"
+  install -o root -g root -m 0600 "$TLS_KEY" "$WORK/privkey.pem"
+  TLS_CERT="$WORK/fullchain.pem"
+  TLS_KEY="$WORK/privkey.pem"
+
+  REINSTALL_STARTED=true
+  for unit in "${units[@]}"; do
+    if systemctl cat "$unit" >/dev/null 2>&1; then
+      systemctl stop "$unit"
+      systemctl disable "$unit" >/dev/null 2>&1 || true
+    fi
+  done
+  if command -v ss >/dev/null; then
+    [[ -z "$(ss -H -ltn '( sport = :8787 )')" ]] || fail 'Cannot reinstall: port 8787 is still in use after stopping the application service.'
+  fi
+  if command -v pgrep >/dev/null; then
+    for account in vpb vpb-build vpb-backup vpb-clamav; do
+      if id "$account" >/dev/null 2>&1 && pgrep -u "$account" >/dev/null 2>&1; then
+        fail "Cannot reinstall while account $account still has running processes."
+      fi
+    done
+  fi
+  if command -v nft >/dev/null && nft list table inet vpb_guard >/dev/null 2>&1; then
+    nft delete table inet vpb_guard
+  fi
+  rm -rf -- "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
+    "$CLAMAV_DATABASE" "$node_root"
+  rm -f -- /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/vpb-port-guard.nft \
+    /etc/systemd/system/vocaloid-producer-blog.service /etc/systemd/system/vpb-port-guard.service \
+    /etc/systemd/system/vpb-freshclam.service /etc/systemd/system/vpb-freshclam.timer \
+    /etc/systemd/system/vocaloid-producer-blog-backup.service \
+    /etc/systemd/system/vocaloid-producer-blog-backup.timer \
+    /etc/systemd/system/vocaloid-producer-blog-restore-drill.service \
+    /etc/systemd/system/vocaloid-producer-blog-restore-drill.timer
+  systemctl daemon-reload
+  systemctl reset-failed "${units[@]}" >/dev/null 2>&1 || true
+  if systemctl is-active --quiet nginx.service; then
+    nginx -t
+    systemctl reload nginx.service
+  fi
+  for account in vpb vpb-build vpb-backup vpb-clamav; do
+    if id "$account" >/dev/null 2>&1; then userdel --remove "$account"; fi
+  done
+  for account in vpb vpb-build vpb-backup vpb-clamav; do
+    if getent group "$account" >/dev/null 2>&1; then groupdel "$account"; fi
+  done
+  require_fresh_state
+  log 'Previous Vocaloid Producer Blog installation removed; starting a clean installation'
 }
 
 require_resume_state() {
@@ -84,23 +206,26 @@ require_resume_state() {
   TLS_KEY="$CONFIG/privkey.pem"
 }
 
+validate_tls() {
+  openssl x509 -in "$TLS_CERT" -noout -checkend 86400 || fail 'Certificate expires within 24 hours.'
+  for domain in "$DOMAIN" "$WWW_DOMAIN"; do
+    openssl x509 -in "$TLS_CERT" -noout -checkhost "$domain" || fail 'Certificate does not cover the configured domain.'
+  done
+  [[ "$(openssl x509 -in "$TLS_CERT" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum)" == \
+     "$(openssl pkey -in "$TLS_KEY" -pubout -outform DER | sha256sum)" ]] || fail 'Certificate/key mismatch.'
+}
+
 preflight() {
-  [[ "$EUID" == 0 ]] || fail 'Run with sudo bash deploy/install-alinux4.sh [--resume]'
+  [[ "$EUID" == 0 ]] || fail 'Run with sudo bash deploy/install-alinux4.sh [--resume|--reinstall]'
   source /etc/os-release
   [[ "${ID:-}" == alinux && "${VERSION_ID:-}" =~ ^4([.]|$) ]] || fail 'Requires Alibaba Cloud Linux 4.'
   [[ -d /run/systemd/system ]] || fail 'Requires a host running systemd.'
   if [[ "$RESUME" == true ]]; then
     require_resume_state
+  elif [[ "$REINSTALL" == true ]]; then
+    require_reinstall_state
   else
-    for target in "$APP" "$STORE" "$CONFIG" "$BACKUPS" /opt/vocaloid-producer-blog-backup \
-      /etc/nginx/conf.d/vocaloid-producer-blog.conf /etc/systemd/system/vocaloid-producer-blog.service \
-      /etc/systemd/system/vpb-port-guard.service /etc/systemd/system/vpb-freshclam.service \
-      /etc/systemd/system/vpb-freshclam.timer /etc/vpb-port-guard.nft; do
-      [[ ! -e "$target" && ! -L "$target" ]] || fail "Existing installation target: $target. Use the upgrade/migration procedure instead."
-    done
-    for account in vpb vpb-build vpb-backup vpb-clamav; do
-      ! id "$account" >/dev/null 2>&1 || fail "Account already exists: $account"
-    done
+    require_fresh_state
   fi
   prompt DOMAIN 'Primary domain' utopiap.top
   prompt WWW_DOMAIN 'Second domain (use the primary domain again for a single-domain site)' "www.$DOMAIN"
@@ -117,14 +242,22 @@ preflight() {
     prompt TLS_KEY 'Absolute path to PEM private key'
   fi
   [[ "$TLS_CERT" == /* && -f "$TLS_CERT" && "$TLS_KEY" == /* && -f "$TLS_KEY" ]] || fail 'Certificate and private key files are required.'
+  if [[ "$REINSTALL" == true ]]; then
+    command -v openssl >/dev/null || fail 'Cannot validate TLS files before reinstallation because openssl is unavailable.'
+    validate_tls
+  fi
   command -v git >/dev/null || fail 'Install git and clone this repository first: sudo dnf install -y git'
   [[ -z "$(git -C "$SOURCE" status --porcelain)" ]] || fail 'The source checkout must be clean. Commit the installer before distribution.'
   COMMIT="$(git -C "$SOURCE" rev-parse HEAD)"
   [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail 'Invalid source commit.'
-  if command -v ss >/dev/null; then
+  if [[ "$REINSTALL" != true ]] && command -v ss >/dev/null; then
     [[ -z "$(ss -H -ltn '( sport = :80 or sport = :443 or sport = :8787 )')" ]] || fail 'Ports 80, 443 or 8787 are in use. This installer is for a fresh host.'
   fi
   prompt_admin_password
+  if [[ "$REINSTALL" == true ]]; then
+    confirm_reinstall
+    reset_installation
+  fi
 }
 
 install_runtime() {
@@ -136,12 +269,7 @@ install_runtime() {
     dnf install -y policycoreutils-python-utils
     setsebool -P httpd_can_network_connect on
   fi
-  openssl x509 -in "$TLS_CERT" -noout -checkend 86400 || fail 'Certificate expires within 24 hours.'
-  for domain in "$DOMAIN" "$WWW_DOMAIN"; do
-    openssl x509 -in "$TLS_CERT" -noout -checkhost "$domain" || fail 'Certificate does not cover the configured domain.'
-  done
-  [[ "$(openssl x509 -in "$TLS_CERT" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum)" == \
-     "$(openssl pkey -in "$TLS_KEY" -pubout -outform DER | sha256sum)" ]] || fail 'Certificate/key mismatch.'
+  validate_tls
   local version arch archive clamav_arch clamav_rpm clamav_sha256
   version="$(tr -d '\r\n' < "$SOURCE/.nvmrc")"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Invalid .nvmrc'
@@ -160,7 +288,7 @@ install_runtime() {
   esac
   NODE_ROOT="/opt/vpb-node-$version-$arch"
   archive="node-v$version-linux-$arch.tar.xz"
-  WORK="$(mktemp -d /tmp/vpb-install.XXXXXXXX)"
+  if [[ -z "$WORK" ]]; then WORK="$(mktemp -d /tmp/vpb-install.XXXXXXXX)"; fi
   clamav_rpm="clamav-${CLAMAV_VERSION}.linux.${clamav_arch}.rpm"
   if [[ "$RESUME" == true ]]; then
     CLAMSCAN_BIN="$(command -v clamscan)" || fail 'Cannot resume: clamscan is not installed.'
@@ -390,6 +518,7 @@ map \$uri \$vpb_admin_cache {
 EOF
   if command -v restorecon >/dev/null; then restorecon -RF "$CONFIG" /etc/nginx/conf.d; fi
   nginx -t
+  if systemctl is-active --quiet nginx.service; then systemctl reload nginx.service; fi
   if systemctl is-active --quiet firewalld; then
     firewall-cmd --permanent --add-service=http
     firewall-cmd --permanent --add-service=https
