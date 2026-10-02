@@ -3,5 +3,8 @@ dist/
 .env
 .screenshots/
 .backups/
+__pycache__/
+.pytest_cache/
+*.py[cod]
 server/uploads/*
 !server/uploads/.gitkeep
