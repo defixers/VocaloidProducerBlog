@@ -51,7 +51,7 @@
     "backup:drill": "node scripts/restore-drill.mjs"
   },
   "dependencies": {
-    "@lucide/vue": "1.48.0",
+    "@lucide/vue": "1.53.0",
     "@vitejs/plugin-vue": "6.0.9",
     "dompurify": "3.4.16",
     "express": "4.22.3",
